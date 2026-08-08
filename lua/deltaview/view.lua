@@ -357,6 +357,12 @@ M.setup_cursor_placement_tracking = function(bufnr, winnr)
                         new_line_num = line.new_line_num,
                         filepath = diff_data.new_path or nil,
                     }
+                elseif line.old_line_num ~= nil then
+                    -- removed line: new_line_num is nil, use old_line_num as best-effort approximation
+                    row_lookup[line.formatted_diff_line_num + 1] = {
+                        new_line_num = line.old_line_num,
+                        filepath = diff_data.new_path or nil,
+                    }
                 else
                     row_lookup[line.formatted_diff_line_num + 1] = false
                 end
