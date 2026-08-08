@@ -517,20 +517,26 @@ M.setup_delta_statuscolumn = function(bufnr, winid)
     ))
 
     local current_statuscolumn = vim.api.nvim_get_option_value('statuscolumn', { win = win })
+    local current_number = vim.api.nvim_get_option_value('number', { win = win })
+    local current_relativenumber = vim.api.nvim_get_option_value('relativenumber', { win = win })
 
     vim.api.nvim_set_option_value('statuscolumn',
         '%{%v:lua.require("delta.statuscolumn").render(v:lnum)%}',
-        { win = 0 }
+        { win = win }
     )
+    vim.api.nvim_set_option_value('number', false, { win = win })
+    vim.api.nvim_set_option_value('relativenumber', false, { win = win })
     vim.cmd('redraw')
 
     vim.api.nvim_create_autocmd('BufUnload', {
         buffer = bufnr,
         once = true,
         callback = function()
-            -- restore statuscolumn when leaving the buffer
-            if vim.api.nvim_win_is_valid(0) then
+            -- restore window options when leaving the buffer
+            if vim.api.nvim_win_is_valid(win) then
                 vim.api.nvim_set_option_value('statuscolumn', current_statuscolumn, { win = win })
+                vim.api.nvim_set_option_value('number', current_number, { win = win })
+                vim.api.nvim_set_option_value('relativenumber', current_relativenumber, { win = win })
             end
         end
     })

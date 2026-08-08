@@ -53,7 +53,7 @@ end
 M.defaults = {
     use_nerdfonts = true,
     default_context = 3,
-    line_numbers = false,
+    line_numbers = true,
     fzf_picker = nil,
     keyconfig = {
         dm_toggle_keybind = "",

@@ -1,7 +1,7 @@
 local M = {}
 
 --- render the statuscolumn for a DeltaView diff buffer
---- shows: old_line ⋮ new_line with color based on line type
+--- shows: new file line number with color based on line type
 --- @param lnum number The line number (1-indexed)
 --- @return string The formatted statuscolumn content
 M.render = function(lnum)
@@ -38,14 +38,12 @@ M.render = function(lnum)
         hl_group = nil
     end
 
-    local old_str = map.old and string.format('%4d', map.old) or '    '
-    local new_str = map.new and string.format('%-4d', map.new) or '    '
+    local new_str = map.new and string.format('%4d ', map.new) or '     '
 
-    -- Apply highlighting if we have a highlight group
     if hl_group then
-        return string.format('%%#%s#%s ⋮ %s%%*', hl_group, old_str, new_str)
+        return string.format('%%#%s#%s%%*', hl_group, new_str)
     else
-        return string.format('%s ⋮ %s', old_str, new_str)
+        return new_str
     end
 end
 
