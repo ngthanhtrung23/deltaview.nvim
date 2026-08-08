@@ -614,41 +614,7 @@ M.jump_to_hunk = function(bufnr, forward)
             end
         end
     end
-    -- fallback: jump to first hunk if forward, last hunk if not forward
-    local data_set_idx = forward and 1 or #delta_diff_data_set
-    local diff_data = delta_diff_data_set[data_set_idx]
-    local hunk_number = forward and 1 or #no_context_delta_diff_data_set[data_set_idx].hunks
-    local hunk_line = no_context_delta_diff_data_set[data_set_idx].hunks[hunk_number]
-    local hunk_display_number = forward and 1 or total_hunk_count
-    for j = 1, #diff_data.hunks, 1 do
-        local lines = diff_data.hunks[j].lines
-        for _, real_buf_line in ipairs(lines) do
-            if hunk_line.lines[1].new_line_num == real_buf_line.new_line_num and
-                hunk_line.lines[1].old_line_num == real_buf_line.old_line_num
-            then
-                local target_lnum = real_buf_line.formatted_diff_line_num + 1
-                local w0 = vim.fn.line('w0')
-                local wend = vim.fn.line('w$')
-                vim.api.nvim_win_set_cursor(0, { target_lnum, 0 })
-                if target_lnum < w0 or target_lnum > wend then
-                    vim.cmd('normal! zz')
-                end
-                local file_ui = config.viewconfig().file .. ' '
-                    .. (forward and 1 or #delta_diff_data_set) .. '|'
-                    .. #delta_diff_data_set .. '  '
-                if #delta_diff_data_set == 1 then
-                    file_ui = ''
-                end
-                local hunk_ui = config.viewconfig().segment .. ' '
-                    .. hunk_display_number .. '|'
-                    .. total_hunk_count
-                vim.api.nvim_echo({ { 'jumped to  ' .. file_ui .. hunk_ui, 'Normal' }
-                }, false, {})
-                vim.defer_fn(function() vim.cmd('echo ""') end, 2000)
-                return
-            end
-        end
-    end
+    vim.notify('No more hunks', vim.log.levels.INFO)
 end
 
 

@@ -59,8 +59,8 @@ M.defaults = {
         dm_toggle_keybind = "",
         dv_toggle_keybind = "",
         d_toggle_keybind = "",
-        next_hunk = "<Tab>", -- deviates from ]c intentionally. See readme `Default Keybindings`
-        prev_hunk = "<S-Tab>", -- deviates from [c intentionally. See readme `Default Keybindings`
+        next_hunk = "]c",
+        prev_hunk = "[c",
         next_diff = "]f",
         prev_diff = "[f",
         help_legend = "d?",
@@ -99,8 +99,8 @@ end
 --- @field dv_toggle_keybind string | nil if defined, will create keybind that runs DeltaView, and exits Diff buffer if open. By default, <leader>dv.
 --- @field dm_toggle_keybind string | nil if defined, will create keybind that runs DeltaView Menu. By default, <leader>dm.
 --- @field d_toggle_keybind string | nil if defined, will create keybind that runs Delta, and exits Diff buffer if open
---- @field next_hunk string skip to next hunk in diff.
---- @field prev_hunk string skip to prev hunk in diff.
+--- @field next_hunk string skip to next hunk in diff. Defaults to ]c.
+--- @field prev_hunk string skip to prev hunk in diff. Defaults to [c.
 --- @field help_legend string opens the help legend when inside a deltaview buffer
 
 --- @class DeltaViewOpts
