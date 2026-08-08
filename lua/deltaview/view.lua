@@ -417,13 +417,13 @@ M.get_delta_buffer_cursor_exit_strategy = function(bufnr, winnr, alternative_buf
                     end
                 end
             end
-            -- cursor is on a title/fence line with no associated file — fall back to alternate buffer
-            local alt = vim.fn.bufnr('#')
-            if alt ~= -1 and vim.api.nvim_buf_is_valid(alt) then
-                vim.api.nvim_set_current_buf(alt)
-                return true
+            -- cursor is on a title/fence line with no associated file — close the diff buffer
+            local success, err = pcall(vim.api.nvim_buf_delete, bufnr, { force = true })
+            if not success then
+                vim.notify('Failed to close diff buffer: ' .. tostring(err), vim.log.levels.ERROR)
+                return false
             end
-            return false
+            return true
         end
 
         if alternative_bufnr ~= nil then
