@@ -5,6 +5,8 @@ local help = require('deltaview.help')
 local _echo_timer = nil
 --- @type table<number, fun()> refresh callbacks keyed by bufnr, cleaned up on BufUnload
 M._refresh_fns = {}
+--- @type {rel_path: string|nil, new_line_num: number, data_idx: number} | nil
+M._post_revert_target = nil
 
 --- deltaview file diff buffer orchestrator, opens a deltaview diff on top of current window
 --- @param ref string git ref to compare against. Can be branch, commit, tag, etc.
@@ -34,7 +36,12 @@ M.deltaview_file = function(ref)
     vim.keymap.set('n', '<leader>hu', function() M.revert_hunk_under_cursor(diff_bufnr) end, { buffer = diff_bufnr, silent = true })
     help.register_keybind(diff_bufnr, '<leader>hu', 'revert hunk under cursor', 'keybind')
     help.setup_help_keybind(diff_bufnr)
-    M._refresh_fns[diff_bufnr] = function() M.deltaview_file(ref) end
+    M._refresh_fns[diff_bufnr] = function()
+        local target = M._post_revert_target
+        M._post_revert_target = nil
+        local new_bufnr = M.deltaview_file(ref)
+        if new_bufnr and target then M.place_cursor_after_revert(new_bufnr, target) end
+    end
     vim.api.nvim_create_autocmd('BufUnload', { buffer = diff_bufnr, once = true, callback = function()
         M._refresh_fns[diff_bufnr] = nil
     end })
@@ -72,7 +79,12 @@ M.delta_path = function(ref, context, path)
     vim.keymap.set('n', '<leader>hu', function() M.revert_hunk_under_cursor(diff_bufnr) end, { buffer = diff_bufnr, silent = true })
     help.register_keybind(diff_bufnr, '<leader>hu', 'revert hunk under cursor', 'keybind')
     help.setup_help_keybind(diff_bufnr)
-    M._refresh_fns[diff_bufnr] = function() M.delta_path(ref, context, path) end
+    M._refresh_fns[diff_bufnr] = function()
+        local target = M._post_revert_target
+        M._post_revert_target = nil
+        local new_bufnr = M.delta_path(ref, context, path)
+        if new_bufnr and target then M.place_cursor_after_revert(new_bufnr, target) end
+    end
     vim.api.nvim_create_autocmd('BufUnload', { buffer = diff_bufnr, once = true, callback = function()
         M._refresh_fns[diff_bufnr] = nil
     end })
@@ -708,12 +720,15 @@ M.revert_hunk_under_cursor = function(bufnr)
                     return
                 end
 
+                M._post_revert_target = {
+                    rel_path = rel_path,
+                    new_line_num = first_new_num or first_old_num or 1,
+                    data_idx = data_idx,
+                }
                 local refresh_fn = M._refresh_fns[bufnr]
                 vim.schedule(function()
                     vim.api.nvim_buf_delete(bufnr, { force = true })
-                    if refresh_fn then
-                        refresh_fn()
-                    end
+                    if refresh_fn then refresh_fn() end
                 end)
                 return
             end
@@ -721,6 +736,75 @@ M.revert_hunk_under_cursor = function(bufnr)
     end
 
     vim.notify('No changed hunk at cursor position', vim.log.levels.WARN)
+end
+
+--- Places the cursor in a freshly-opened diff buffer after a hunk revert.
+--- Tries the closest remaining hunk in the same file; falls back to an adjacent file.
+--- @param new_bufnr number
+--- @param target {rel_path: string|nil, new_line_num: number, data_idx: number}
+M.place_cursor_after_revert = function(new_bufnr, target)
+    local delta_diff_data_set = vim.b[new_bufnr].delta_diff_data_set
+    local no_context_diff_data_set = vim.b[new_bufnr].no_context_delta_diff_data_set
+    if not delta_diff_data_set or not no_context_diff_data_set then return end
+
+    -- Returns the buffer row of the hunk closest to target_line in the given data_idx,
+    -- or nil if that file has no hunks.
+    local function closest_row_in(data_idx, target_line)
+        local nc = no_context_diff_data_set[data_idx]
+        if not nc or #nc.hunks == 0 then return nil end
+        local best_row, best_dist = nil, math.huge
+        for _, hunk in ipairs(nc.hunks) do
+            local line_num
+            for _, l in ipairs(hunk.lines) do
+                line_num = l.new_line_num or l.old_line_num
+                if line_num then break end
+            end
+            if line_num then
+                local dist = math.abs(line_num - target_line)
+                if dist < best_dist then
+                    best_dist = dist
+                    best_row = hunk.lines[1].formatted_diff_line_num + 1
+                end
+            end
+        end
+        return best_row
+    end
+
+    -- Find the file index for the target (nil new_path = single-file text_diff, always index 1)
+    local same_file_idx = nil
+    for i, dd in ipairs(delta_diff_data_set) do
+        if dd.new_path == nil or dd.new_path == target.rel_path then
+            same_file_idx = i
+            break
+        end
+    end
+
+    local target_row = same_file_idx and closest_row_in(same_file_idx, target.new_line_num)
+
+    if not target_row then
+        -- File is gone from diff: walk backwards then forwards for an adjacent file
+        for i = target.data_idx - 1, 1, -1 do
+            local nc = no_context_diff_data_set[i]
+            if nc and #nc.hunks > 0 then
+                target_row = nc.hunks[#nc.hunks].lines[1].formatted_diff_line_num + 1
+                break
+            end
+        end
+        if not target_row then
+            for i = target.data_idx + 1, #no_context_diff_data_set do
+                local nc = no_context_diff_data_set[i]
+                if nc and #nc.hunks > 0 then
+                    target_row = nc.hunks[1].lines[1].formatted_diff_line_num + 1
+                    break
+                end
+            end
+        end
+    end
+
+    if target_row then
+        vim.api.nvim_win_set_cursor(0, { target_row, 0 })
+        vim.cmd('normal! zz')
+    end
 end
 
 
