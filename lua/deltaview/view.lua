@@ -379,10 +379,46 @@ M.get_delta_buffer_cursor_exit_strategy = function(bufnr, winnr, alternative_buf
     M.setup_cursor_placement_tracking(bufnr, winnr)
 
     return function()
+        local og_winline = vim.fn.winline()
+
         if M.cursor_placement == nil then
+            -- cursor is on a deleted or non-diff line — navigate back without precise cursor placement
+            if alternative_bufnr ~= nil then
+                local success, err = pcall(function()
+                    vim.api.nvim_set_current_buf(alternative_bufnr)
+                end)
+                if not success then
+                    vim.notify('Failed to navigate to alternative buffer' .. tostring(err), vim.log.levels.ERROR)
+                    return false
+                end
+                return true
+            end
+            -- filepath flow: find which file the cursor is in and open it without cursor placement
+            local cur_row = vim.api.nvim_win_get_cursor(0)[1]
+            local git_root = vim.b[bufnr].git_root
+            local delta_diff_data_set = vim.b[bufnr].delta_diff_data_set
+            if git_root and delta_diff_data_set then
+                for _, diff_data in ipairs(delta_diff_data_set) do
+                    if diff_data.new_path then
+                        for _, hunk in ipairs(diff_data.hunks) do
+                            for _, line in ipairs(hunk.lines) do
+                                if line.formatted_diff_line_num + 1 == cur_row then
+                                    local success, err = pcall(function()
+                                        vim.cmd('e ' .. vim.fn.fnameescape(git_root .. '/' .. diff_data.new_path))
+                                    end)
+                                    if not success then
+                                        vim.notify('Failed to open file: ' .. tostring(err), vim.log.levels.ERROR)
+                                        return false
+                                    end
+                                    return true
+                                end
+                            end
+                        end
+                    end
+                end
+            end
             return false
         end
-        local og_winline = vim.fn.winline()
 
         if alternative_bufnr ~= nil then
             local success, err = pcall(function()
