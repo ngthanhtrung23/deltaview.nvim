@@ -417,6 +417,12 @@ M.get_delta_buffer_cursor_exit_strategy = function(bufnr, winnr, alternative_buf
                     end
                 end
             end
+            -- cursor is on a title/fence line with no associated file — fall back to alternate buffer
+            local alt = vim.fn.bufnr('#')
+            if alt ~= -1 and vim.api.nvim_buf_is_valid(alt) then
+                vim.api.nvim_set_current_buf(alt)
+                return true
+            end
             return false
         end
 
