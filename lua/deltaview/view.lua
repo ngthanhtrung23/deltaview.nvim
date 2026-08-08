@@ -3,6 +3,8 @@ local utils = require('deltaview.utils')
 local config = require('deltaview.config')
 local help = require('deltaview.help')
 local _echo_timer = nil
+--- @type table<number, fun()> refresh callbacks keyed by bufnr, cleaned up on BufUnload
+M._refresh_fns = {}
 
 --- deltaview file diff buffer orchestrator, opens a deltaview diff on top of current window
 --- @param ref string git ref to compare against. Can be branch, commit, tag, etc.
@@ -29,7 +31,13 @@ M.deltaview_file = function(ref)
     help.register_keybind(diff_bufnr, '<Esc>', 'close diff and return to file', 'keybind')
     vim.keymap.set('n', 'q', nav_back_and_place_cursor, { buffer = diff_bufnr, silent = true })
     help.register_keybind(diff_bufnr, 'q', 'close diff and return to file', 'keybind')
+    vim.keymap.set('n', '<leader>hu', function() M.revert_hunk_under_cursor(diff_bufnr) end, { buffer = diff_bufnr, silent = true })
+    help.register_keybind(diff_bufnr, '<leader>hu', 'revert hunk under cursor', 'keybind')
     help.setup_help_keybind(diff_bufnr)
+    M._refresh_fns[diff_bufnr] = function() M.deltaview_file(ref) end
+    vim.api.nvim_create_autocmd('BufUnload', { buffer = diff_bufnr, once = true, callback = function()
+        M._refresh_fns[diff_bufnr] = nil
+    end })
     return diff_bufnr
 end
 
@@ -61,7 +69,13 @@ M.delta_path = function(ref, context, path)
     help.register_keybind(diff_bufnr, '<Esc>', 'close diff and return to file', 'keybind')
     vim.keymap.set('n', 'q', nav_back_and_place_cursor, { buffer = diff_bufnr, silent = true })
     help.register_keybind(diff_bufnr, 'q', 'close diff and return to file', 'keybind')
+    vim.keymap.set('n', '<leader>hu', function() M.revert_hunk_under_cursor(diff_bufnr) end, { buffer = diff_bufnr, silent = true })
+    help.register_keybind(diff_bufnr, '<leader>hu', 'revert hunk under cursor', 'keybind')
     help.setup_help_keybind(diff_bufnr)
+    M._refresh_fns[diff_bufnr] = function() M.delta_path(ref, context, path) end
+    vim.api.nvim_create_autocmd('BufUnload', { buffer = diff_bufnr, once = true, callback = function()
+        M._refresh_fns[diff_bufnr] = nil
+    end })
     return diff_bufnr
 end
 
@@ -132,6 +146,7 @@ M.open_git_diff_buffer = function(filepath, ref, winnr)
     if bufnr == nil then
         return -- error already notified
     end
+    vim.b[bufnr].source_filepath = filepath
 
     local success, err = pcall(function()
         vim.api.nvim_win_set_buf(winnr or 0, bufnr)
@@ -615,6 +630,97 @@ M.jump_to_hunk = function(bufnr, forward)
         end
     end
     vim.notify('No more hunks', vim.log.levels.INFO)
+end
+
+--- Reverts the hunk under the cursor by applying the inverse patch via git apply.
+--- Works for both single-file (deltaview_file) and multi-file (delta_path) diff buffers.
+--- @param bufnr number buf_id of the diff buffer
+M.revert_hunk_under_cursor = function(bufnr)
+    local no_context_diff_data_set = vim.b[bufnr].no_context_delta_diff_data_set
+    local delta_diff_data_set = vim.b[bufnr].delta_diff_data_set
+    local git_root = vim.b[bufnr].git_root
+
+    if not no_context_diff_data_set or not delta_diff_data_set or not git_root then
+        vim.notify('Hunk revert is not available for this buffer', vim.log.levels.WARN)
+        return
+    end
+
+    local cur_row = vim.api.nvim_win_get_cursor(0)[1]
+
+    for data_idx, diff_data in ipairs(no_context_diff_data_set) do
+        for _, hunk in ipairs(diff_data.hunks) do
+            local first_row = hunk.lines[1].formatted_diff_line_num + 1
+            local last_row = hunk.lines[#hunk.lines].formatted_diff_line_num + 1
+
+            if cur_row >= first_row and cur_row <= last_row then
+                -- Determine the file path (relative to git_root)
+                local full_diff_data = delta_diff_data_set[data_idx]
+                local rel_path = full_diff_data and full_diff_data.new_path
+                if not rel_path then
+                    local source = vim.b[bufnr].source_filepath
+                    if source and vim.startswith(source, git_root .. '/') then
+                        rel_path = source:sub(#git_root + 2)
+                    end
+                end
+                if not rel_path then
+                    vim.notify('Cannot determine file path for revert', vim.log.levels.ERROR)
+                    return
+                end
+
+                -- Collect added/removed lines and compute hunk header numbers
+                local patch_body = {}
+                local first_old_num, first_new_num = nil, nil
+                local old_count, new_count = 0, 0
+
+                for _, line in ipairs(hunk.lines) do
+                    if line.line_type == 'removed' then
+                        first_old_num = first_old_num or line.old_line_num
+                        old_count = old_count + 1
+                        table.insert(patch_body, '-' .. line.content)
+                    elseif line.line_type == 'added' then
+                        first_new_num = first_new_num or line.new_line_num
+                        new_count = new_count + 1
+                        table.insert(patch_body, '+' .. line.content)
+                    end
+                end
+
+                -- git unified diff @@ header: if count==0, start is the line before the insertion point
+                local old_start = first_old_num or math.max(0, (first_new_num or 1) - 1)
+                local new_start = first_new_num or first_old_num or 1
+
+                local hunk_header = string.format('@@ -%d,%d +%d,%d @@', old_start, old_count, new_start, new_count)
+                local patch = table.concat({
+                    'diff --git a/' .. rel_path .. ' b/' .. rel_path,
+                    '--- a/' .. rel_path,
+                    '+++ b/' .. rel_path,
+                    hunk_header,
+                    table.concat(patch_body, '\n'),
+                    '',
+                }, '\n')
+
+                local result = vim.system(
+                    { 'git', '-C', git_root, 'apply', '--reverse', '--unidiff-zero', '--whitespace=nowarn' },
+                    { stdin = patch }
+                ):wait()
+
+                if result.code ~= 0 then
+                    vim.notify('Failed to revert hunk: ' .. (result.stderr or ''), vim.log.levels.ERROR)
+                    return
+                end
+
+                local refresh_fn = M._refresh_fns[bufnr]
+                vim.schedule(function()
+                    vim.api.nvim_buf_delete(bufnr, { force = true })
+                    if refresh_fn then
+                        refresh_fn()
+                    end
+                end)
+                return
+            end
+        end
+    end
+
+    vim.notify('No changed hunk at cursor position', vim.log.levels.WARN)
 end
 
 
