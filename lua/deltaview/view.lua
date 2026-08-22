@@ -24,6 +24,7 @@ M.deltaview_file = function(ref)
     vim.b[diff_bufnr].git_root = vim.b[diff_bufnr].git_root or utils.get_git_root(filepath)
     M.place_cursor_delta_buffer_entry(diff_bufnr, 0, cursor_placement, og_winline, vim.b[diff_bufnr].git_root)
     M.setup_hunk_navigation(diff_bufnr)
+    M.setup_winbar(diff_bufnr)
     local nav_back_and_place_cursor = M.get_delta_buffer_cursor_exit_strategy(diff_bufnr, 0, cur_bufnr)
     if nav_back_and_place_cursor == nil then
         return
@@ -67,6 +68,7 @@ M.delta_path = function(ref, context, path)
     vim.b[diff_bufnr].git_root = vim.b[diff_bufnr].git_root or utils.get_git_root(path)
     M.place_cursor_delta_buffer_entry(diff_bufnr, 0, cursor_placement, og_winline, vim.b[diff_bufnr].git_root)
     M.setup_hunk_navigation(diff_bufnr)
+    M.setup_winbar(diff_bufnr)
     local nav_back_and_place_cursor = M.get_delta_buffer_cursor_exit_strategy(diff_bufnr, 0)
     if nav_back_and_place_cursor == nil then
         return
@@ -538,6 +540,66 @@ M.set_restview = function(winnr, og_winline, target_row, target_col)
     end
 end
 
+--- Sets up a sticky winbar showing the current file name, updated as the cursor moves.
+--- @param bufnr number buf_id of the diff buffer
+M.setup_winbar = function(bufnr)
+    local delta_diff_data_set = vim.b[bufnr].delta_diff_data_set
+    if not delta_diff_data_set then return end
+
+    -- Build a sorted list of { row, path } from each file's first hunk line
+    local file_ranges = {}
+    for _, diff_data in ipairs(delta_diff_data_set) do
+        local path = diff_data.new_path
+        if path and #diff_data.hunks > 0 then
+            local first_row = diff_data.hunks[1].lines[1].formatted_diff_line_num + 1
+            table.insert(file_ranges, { row = first_row, path = path })
+        end
+    end
+    table.sort(file_ranges, function(a, b) return a.row < b.row end)
+
+    -- Fallback for single-file text_diff buffers (no new_path in diff data)
+    local static_path = vim.b[bufnr].source_filepath
+    if #file_ranges == 0 and not static_path then return end
+
+    local get_path_at_row = function(row)
+        if #file_ranges == 0 then return static_path end
+        local current = file_ranges[1].path
+        for _, entry in ipairs(file_ranges) do
+            if entry.row <= row then
+                current = entry.path
+            else
+                break
+            end
+        end
+        return current
+    end
+
+    local update_winbar = function()
+        local win = vim.api.nvim_get_current_win()
+        if not vim.api.nvim_win_is_valid(win) then return end
+        local row = vim.api.nvim_win_get_cursor(win)[1]
+        local path = get_path_at_row(row)
+        vim.wo[win].winbar = path and (' ' .. path) or ''
+    end
+
+    update_winbar()
+
+    vim.api.nvim_create_autocmd('CursorMoved', {
+        buffer = bufnr,
+        callback = update_winbar,
+    })
+
+    vim.api.nvim_create_autocmd('BufLeave', {
+        buffer = bufnr,
+        callback = function()
+            local win = vim.api.nvim_get_current_win()
+            if vim.api.nvim_win_is_valid(win) then
+                vim.wo[win].winbar = ''
+            end
+        end,
+    })
+end
+
 --- @param bufnr number
 M.setup_hunk_navigation = function(bufnr)
     vim.keymap.set('n', config.options.keyconfig.next_hunk, function()
@@ -614,12 +676,8 @@ M.jump_to_hunk = function(bufnr, forward)
                         hunk_line.lines[1].old_line_num == real_buf_line.old_line_num
                     then
                         local target_lnum = real_buf_line.formatted_diff_line_num + 1
-                        local w0 = vim.fn.line('w0')
-                        local wend = vim.fn.line('w$')
                         vim.api.nvim_win_set_cursor(0, { target_lnum, 0 })
-                        if target_lnum < w0 or target_lnum > wend then
-                            vim.cmd('normal! zz')
-                        end
+                        vim.cmd('normal! zt')
                         local file_ui = config.viewconfig().file .. ' '
                             ..  data_set_idx .. '|'
                             .. #delta_diff_data_set .. '  '
