@@ -30,8 +30,7 @@ M.deltaview_file = function(ref)
         return
     end
 
-    vim.keymap.set('n', '<Esc>', nav_back_and_place_cursor, { buffer = diff_bufnr, silent = true })
-    help.register_keybind(diff_bufnr, '<Esc>', 'close diff and return to file', 'keybind')
+
     vim.keymap.set('n', 'q', nav_back_and_place_cursor, { buffer = diff_bufnr, silent = true })
     help.register_keybind(diff_bufnr, 'q', 'close diff and return to file', 'keybind')
     vim.keymap.set('n', '<leader>hu', function() M.revert_hunk_under_cursor(diff_bufnr) end, { buffer = diff_bufnr, silent = true })
@@ -74,8 +73,7 @@ M.delta_path = function(ref, context, path)
         return
     end
 
-    vim.keymap.set('n', '<Esc>', nav_back_and_place_cursor, { buffer = diff_bufnr, silent = true })
-    help.register_keybind(diff_bufnr, '<Esc>', 'close diff and return to file', 'keybind')
+
     vim.keymap.set('n', 'q', nav_back_and_place_cursor, { buffer = diff_bufnr, silent = true })
     help.register_keybind(diff_bufnr, 'q', 'close diff and return to file', 'keybind')
     vim.keymap.set('n', '<leader>hu', function() M.revert_hunk_under_cursor(diff_bufnr) end, { buffer = diff_bufnr, silent = true })
