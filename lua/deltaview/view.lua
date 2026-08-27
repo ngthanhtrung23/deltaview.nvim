@@ -674,8 +674,10 @@ M.jump_to_hunk = function(bufnr, forward)
                         hunk_line.lines[1].old_line_num == real_buf_line.old_line_num
                     then
                         local target_lnum = real_buf_line.formatted_diff_line_num + 1
-                        vim.api.nvim_win_set_cursor(0, { target_lnum, 0 })
+                        local header_lnum = lines[1].formatted_diff_line_num + 1
+                        vim.api.nvim_win_set_cursor(0, { header_lnum, 0 })
                         vim.cmd('normal! zt')
+                        vim.api.nvim_win_set_cursor(0, { target_lnum, 0 })
                         local file_ui = config.viewconfig().file .. ' '
                             ..  data_set_idx .. '|'
                             .. #delta_diff_data_set .. '  '
