@@ -25,6 +25,7 @@ M.deltaview_file = function(ref)
     M.place_cursor_delta_buffer_entry(diff_bufnr, 0, cursor_placement, og_winline, vim.b[diff_bufnr].git_root)
     M.setup_hunk_navigation(diff_bufnr)
     M.setup_winbar(diff_bufnr)
+    M.setup_line_number_redirect(diff_bufnr)
     local nav_back_and_place_cursor = M.get_delta_buffer_cursor_exit_strategy(diff_bufnr, 0, cur_bufnr)
     if nav_back_and_place_cursor == nil then
         return
@@ -68,6 +69,7 @@ M.delta_path = function(ref, context, path)
     M.place_cursor_delta_buffer_entry(diff_bufnr, 0, cursor_placement, og_winline, vim.b[diff_bufnr].git_root)
     M.setup_hunk_navigation(diff_bufnr)
     M.setup_winbar(diff_bufnr)
+    M.setup_line_number_redirect(diff_bufnr)
     local nav_back_and_place_cursor = M.get_delta_buffer_cursor_exit_strategy(diff_bufnr, 0)
     if nav_back_and_place_cursor == nil then
         return
@@ -600,6 +602,111 @@ M.setup_winbar = function(bufnr)
             if vim.api.nvim_win_is_valid(win) then
                 vim.wo[win].winbar = ''
             end
+        end,
+    })
+end
+
+--- Sets up `:N` line-number redirect so that `:123<Enter>` in the diff buffer
+--- jumps to the buffer row displaying source file line 123 (new_line_num).
+--- If source line 123 is not visible in the diff, the cursor does not move.
+--- @param bufnr number buf_id of the diff buffer
+M.setup_line_number_redirect = function(bufnr)
+    local delta_diff_data_set = vim.b[bufnr].delta_diff_data_set
+    if not delta_diff_data_set then return end
+    --- @cast delta_diff_data_set DiffData[]
+
+    local single_map = nil    -- table<number, number> for single-file buffers
+    local per_file_maps = nil -- table<string, table<number, number>> for multi-file
+    local file_ranges = {}    -- { row, path }[] sorted asc (multi-file only)
+
+    local is_multi_file = false
+    for _, diff_data in ipairs(delta_diff_data_set) do
+        if diff_data.new_path ~= nil then is_multi_file = true; break end
+    end
+
+    if is_multi_file then
+        per_file_maps = {}
+        local prev_last_row = 0
+        for _, diff_data in ipairs(delta_diff_data_set) do
+            local path = diff_data.new_path
+            if path and #diff_data.hunks > 0 then
+                local file_map = {}
+                for _, hunk in ipairs(diff_data.hunks) do
+                    for _, line in ipairs(hunk.lines) do
+                        if line.new_line_num ~= nil and not file_map[line.new_line_num] then
+                            file_map[line.new_line_num] = line.formatted_diff_line_num + 1
+                        end
+                    end
+                end
+                per_file_maps[path] = file_map
+                table.insert(file_ranges, { row = prev_last_row + 1, path = path })
+                local last_hunk = diff_data.hunks[#diff_data.hunks]
+                prev_last_row = last_hunk.lines[#last_hunk.lines].formatted_diff_line_num + 1
+            end
+        end
+    else
+        single_map = {}
+        for _, diff_data in ipairs(delta_diff_data_set) do
+            for _, hunk in ipairs(diff_data.hunks) do
+                for _, line in ipairs(hunk.lines) do
+                    if line.new_line_num ~= nil and not single_map[line.new_line_num] then
+                        single_map[line.new_line_num] = line.formatted_diff_line_num + 1
+                    end
+                end
+            end
+        end
+    end
+
+    local get_map_at_row = function(cur_row)
+        if single_map then return single_map end
+        local current_path = file_ranges[1] and file_ranges[1].path
+        for _, entry in ipairs(file_ranges) do
+            if entry.row <= cur_row then current_path = entry.path
+            else break end
+        end
+        return current_path and per_file_maps[current_path] or nil
+    end
+
+    local group = vim.api.nvim_create_augroup('deltaview_lineredirect_' .. bufnr, { clear = true })
+    local pending_redirect = nil
+
+    vim.api.nvim_create_autocmd('CmdlineLeave', {
+        group = group,
+        callback = function()
+            if vim.api.nvim_get_current_buf() ~= bufnr then return end
+            if vim.fn.getcmdtype() ~= ':' then return end
+            local cmdline = vim.fn.getcmdline()
+            if not cmdline:match('^%d+$') then return end
+
+            local target_source_line = tonumber(cmdline)
+            local cur_pos = vim.api.nvim_win_get_cursor(0)
+            local map = get_map_at_row(cur_pos[1])
+            local buf_row = map and map[target_source_line]
+
+            if not buf_row then
+                vim.schedule(function()
+                    if vim.api.nvim_get_current_buf() ~= bufnr then return end
+                    vim.api.nvim_win_set_cursor(0, cur_pos)
+                end)
+                return
+            end
+
+            pending_redirect = buf_row
+            vim.schedule(function()
+                if pending_redirect == nil then return end
+                if vim.api.nvim_get_current_buf() ~= bufnr then pending_redirect = nil; return end
+                vim.api.nvim_win_set_cursor(0, { pending_redirect, 0 })
+                pending_redirect = nil
+            end)
+        end,
+    })
+
+    vim.api.nvim_create_autocmd('BufUnload', {
+        group = group,
+        buffer = bufnr,
+        once = true,
+        callback = function()
+            vim.api.nvim_del_augroup_by_name('deltaview_lineredirect_' .. bufnr)
         end,
     })
 end
