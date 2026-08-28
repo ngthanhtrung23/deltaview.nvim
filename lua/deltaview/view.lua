@@ -544,16 +544,20 @@ M.setup_winbar = function(bufnr)
     local delta_diff_data_set = vim.b[bufnr].delta_diff_data_set
     if not delta_diff_data_set then return end
 
-    -- Build a sorted list of { row, path } from each file's first hunk line
+    -- Build a sorted list of { row, path } where each file's section is considered
+    -- to start immediately after the previous file's last hunk line. This ensures
+    -- the file header/separator rows (which precede the first hunk) are attributed
+    -- to the correct file rather than the previous one.
     local file_ranges = {}
+    local prev_last_row = 0
     for _, diff_data in ipairs(delta_diff_data_set) do
         local path = diff_data.new_path
         if path and #diff_data.hunks > 0 then
-            local first_row = diff_data.hunks[1].lines[1].formatted_diff_line_num + 1
-            table.insert(file_ranges, { row = first_row, path = path })
+            table.insert(file_ranges, { row = prev_last_row + 1, path = path })
+            local last_hunk = diff_data.hunks[#diff_data.hunks]
+            prev_last_row = last_hunk.lines[#last_hunk.lines].formatted_diff_line_num + 1
         end
     end
-    table.sort(file_ranges, function(a, b) return a.row < b.row end)
 
     -- Fallback for single-file text_diff buffers (no new_path in diff data)
     local static_path = vim.b[bufnr].source_filepath
