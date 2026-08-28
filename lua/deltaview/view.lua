@@ -3,8 +3,11 @@ local utils = require('deltaview.utils')
 local config = require('deltaview.config')
 local help = require('deltaview.help')
 local _echo_timer = nil
+local _cmdline_cr_registered = false
 --- @type table<number, fun()> refresh callbacks keyed by bufnr, cleaned up on BufUnload
 M._refresh_fns = {}
+--- @type table<number, fun(cur_row: number, target_line: number): number|nil>
+M._line_redirect_handlers = {}
 --- @type {rel_path: string|nil, new_line_num: number, data_idx: number} | nil
 M._post_revert_target = nil
 
@@ -667,46 +670,52 @@ M.setup_line_number_redirect = function(bufnr)
         return current_path and per_file_maps[current_path] or nil
     end
 
-    local group = vim.api.nvim_create_augroup('deltaview_lineredirect_' .. bufnr, { clear = true })
-    local pending_redirect = nil
-
-    vim.api.nvim_create_autocmd('CmdlineLeave', {
-        group = group,
-        callback = function()
-            if vim.api.nvim_get_current_buf() ~= bufnr then return end
-            if vim.fn.getcmdtype() ~= ':' then return end
+    -- Register the global <CR> intercept once for all diff buffers.
+    -- Returns <C-c> (cancel cmdline without executing) when a pure number command
+    -- is typed in a deltaview buffer, then schedules the real cursor move.
+    -- This prevents :N from ever running, eliminating the viewport flicker.
+    if not _cmdline_cr_registered then
+        _cmdline_cr_registered = true
+        vim.keymap.set('c', '<CR>', function()
+            if vim.fn.getcmdtype() ~= ':' then
+                return vim.api.nvim_replace_termcodes('<CR>', true, false, true)
+            end
             local cmdline = vim.fn.getcmdline()
-            if not cmdline:match('^%d+$') then return end
-
-            local target_source_line = tonumber(cmdline)
-            local cur_pos = vim.api.nvim_win_get_cursor(0)
-            local map = get_map_at_row(cur_pos[1])
-            local buf_row = map and map[target_source_line]
-
-            if not buf_row then
-                vim.schedule(function()
-                    if vim.api.nvim_get_current_buf() ~= bufnr then return end
-                    vim.api.nvim_win_set_cursor(0, cur_pos)
-                end)
-                return
+            if not cmdline:match('^%d+$') then
+                return vim.api.nvim_replace_termcodes('<CR>', true, false, true)
+            end
+            local curbuf = vim.api.nvim_get_current_buf()
+            local handler = M._line_redirect_handlers[curbuf]
+            if not handler then
+                return vim.api.nvim_replace_termcodes('<CR>', true, false, true)
             end
 
-            pending_redirect = buf_row
+            local target = tonumber(cmdline)
+            local cur_row = vim.api.nvim_win_get_cursor(0)[1]
+            local buf_row = handler(cur_row, target)
+
             vim.schedule(function()
-                if pending_redirect == nil then return end
-                if vim.api.nvim_get_current_buf() ~= bufnr then pending_redirect = nil; return end
-                vim.api.nvim_win_set_cursor(0, { pending_redirect, 0 })
-                pending_redirect = nil
+                if not vim.api.nvim_buf_is_valid(curbuf) then return end
+                if vim.api.nvim_get_current_buf() ~= curbuf then return end
+                if buf_row then
+                    vim.api.nvim_win_set_cursor(0, { buf_row, 0 })
+                end
             end)
-        end,
-    })
+
+            return vim.api.nvim_replace_termcodes('<C-c>', true, false, true)
+        end, { expr = true, noremap = true, silent = true })
+    end
+
+    M._line_redirect_handlers[bufnr] = function(cur_row, target_line)
+        local map = get_map_at_row(cur_row)
+        return map and map[target_line]
+    end
 
     vim.api.nvim_create_autocmd('BufUnload', {
-        group = group,
         buffer = bufnr,
         once = true,
         callback = function()
-            vim.api.nvim_del_augroup_by_name('deltaview_lineredirect_' .. bufnr)
+            M._line_redirect_handlers[bufnr] = nil
         end,
     })
 end
