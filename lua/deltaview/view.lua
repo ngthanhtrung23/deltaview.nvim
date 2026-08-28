@@ -498,6 +498,8 @@ end
 M.set_restview = function(winnr, og_winline, target_row, target_col)
     local success, err = pcall(function()
         vim.api.nvim_win_call(winnr, function()
+            local line_count = vim.api.nvim_buf_line_count(vim.api.nvim_win_get_buf(winnr))
+            target_row = math.max(1, math.min(target_row, line_count))
             vim.api.nvim_win_set_cursor(winnr, { target_row, target_col })
             vim.cmd('normal! zb')
 
