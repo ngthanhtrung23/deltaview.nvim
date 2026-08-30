@@ -777,63 +777,47 @@ M.setup_fold_navigation = function(bufnr)
         return sections
     end
 
-    -- Creates a fold over [start_row, end_row] and stores metadata.
-    -- If the fold is currently closed, deletes it (toggle off).
-    -- If the fold was opened with zo, re-closes it.
-    local apply_fold = function(start_row, end_row, meta)
+    -- Ensures the metadata table exists for bufnr.
+    local ensure_meta = function()
         if not M._fold_metadata[bufnr] then
             M._fold_metadata[bufnr] = {}
         end
-        if M._fold_metadata[bufnr][start_row] then
-            if vim.fn.foldclosed(start_row) ~= -1 then
-                -- Fold is closed → toggle off: delete it
-                local save_pos = vim.api.nvim_win_get_cursor(0)
-                vim.api.nvim_win_set_cursor(0, { start_row, 0 })
-                vim.cmd('normal! zD')
-                vim.api.nvim_win_set_cursor(0, save_pos)
-                M._fold_metadata[bufnr][start_row] = nil
-            else
-                -- Fold was opened with zo → re-close it
-                vim.cmd(start_row .. 'foldclose')
-            end
-            return
-        end
-        vim.cmd(start_row .. ',' .. end_row .. 'fold')
-        vim.cmd(start_row .. 'foldclose')
-        M._fold_metadata[bufnr][start_row] = meta
     end
 
-    -- <leader>mf: fold/unfold the file section under cursor
-    vim.keymap.set('n', '<leader>mf', function()
-        local cur_row  = vim.api.nvim_win_get_cursor(0)[1]
-        local sections = get_file_sections()
-        for _, s in ipairs(sections) do
-            if cur_row >= s.start_row and cur_row <= s.end_row then
-                local added, removed = 0, 0
-                for _, hunk in ipairs(s.diff_data.hunks) do
-                    for _, line in ipairs(hunk.lines) do
-                        if line.line_type == 'added' then added = added + 1
-                        elseif line.line_type == 'removed' then removed = removed + 1
-                        end
-                    end
-                end
-                apply_fold(s.start_row, s.end_row, {
-                    kind       = 'file',
-                    label      = s.diff_data.new_path,
-                    added      = added,
-                    removed    = removed,
-                    line_count = s.end_row - s.start_row + 1,
-                })
-                return
-            end
-        end
-        vim.notify('No file section at cursor', vim.log.levels.WARN)
-    end, { buffer = bufnr, silent = true })
-    help.register_keybind(bufnr, '<leader>mf', 'fold/unfold file section', 'keybind')
+    -- Deletes the fold at start_row (toggle off). No-op if no fold exists there.
+    local delete_fold = function(start_row)
+        ensure_meta()
+        local save_pos = vim.api.nvim_win_get_cursor(0)
+        vim.api.nvim_win_set_cursor(0, { start_row, 0 })
+        vim.cmd('normal! zD')
+        vim.api.nvim_win_set_cursor(0, save_pos)
+        M._fold_metadata[bufnr][start_row] = nil
+    end
 
-    -- <leader>mh / zc: fold/unfold the hunk under cursor
-    local fold_hunk_at_cursor = function()
-        local cur_row = vim.api.nvim_win_get_cursor(0)[1]
+    -- Creates a fold over [start_row, end_row] (if not already present) and closes it.
+    -- If the fold is already closed, this is a no-op.
+    local close_fold = function(start_row, end_row, meta)
+        ensure_meta()
+        if vim.fn.foldclosed(start_row) ~= -1 then return end
+        if not M._fold_metadata[bufnr][start_row] then
+            vim.cmd(start_row .. ',' .. end_row .. 'fold')
+            M._fold_metadata[bufnr][start_row] = meta
+        end
+        vim.cmd(start_row .. 'foldclose')
+    end
+
+    -- Toggles a fold at [start_row, end_row]: closes if open/absent, deletes if closed.
+    local toggle_fold = function(start_row, end_row, meta)
+        ensure_meta()
+        if M._fold_metadata[bufnr][start_row] and vim.fn.foldclosed(start_row) ~= -1 then
+            delete_fold(start_row)
+        else
+            close_fold(start_row, end_row, meta)
+        end
+    end
+
+    -- Returns hunk fold bounds + metadata for the hunk under cur_row, or nil.
+    local hunk_fold_info_at = function(cur_row)
         for _, diff_data in ipairs(delta_dds) do
             local is_multi      = #diff_data.hunks > 1
             local header_offset = is_multi and 3 or 0
@@ -851,24 +835,68 @@ M.setup_fold_navigation = function(bufnr)
                     end
                     local label = string.format('hunk %d/%d @ line %d',
                         hunk_idx, #diff_data.hunks, hunk.new_start or content_start)
-                    apply_fold(fold_start, fold_end, {
+                    return fold_start, fold_end, {
                         kind       = 'hunk',
                         label      = (diff_data.new_path or '') .. '  ' .. label,
                         added      = added,
                         removed    = removed,
                         line_count = fold_end - fold_start + 1,
-                    })
-                    return
+                    }
                 end
                 ::next_hunk::
             end
         end
-        vim.notify('No hunk at cursor position', vim.log.levels.WARN)
+        return nil
     end
-    vim.keymap.set('n', '<leader>mh', fold_hunk_at_cursor, { buffer = bufnr, silent = true })
+
+    -- <leader>mf: toggle the file section fold under cursor
+    vim.keymap.set('n', '<leader>mf', function()
+        local cur_row  = vim.api.nvim_win_get_cursor(0)[1]
+        local sections = get_file_sections()
+        for _, s in ipairs(sections) do
+            if cur_row >= s.start_row and cur_row <= s.end_row then
+                local added, removed = 0, 0
+                for _, hunk in ipairs(s.diff_data.hunks) do
+                    for _, line in ipairs(hunk.lines) do
+                        if line.line_type == 'added' then added = added + 1
+                        elseif line.line_type == 'removed' then removed = removed + 1
+                        end
+                    end
+                end
+                toggle_fold(s.start_row, s.end_row, {
+                    kind       = 'file',
+                    label      = s.diff_data.new_path,
+                    added      = added,
+                    removed    = removed,
+                    line_count = s.end_row - s.start_row + 1,
+                })
+                return
+            end
+        end
+        vim.notify('No file section at cursor', vim.log.levels.WARN)
+    end, { buffer = bufnr, silent = true })
+    help.register_keybind(bufnr, '<leader>mf', 'fold/unfold file section', 'keybind')
+
+    -- <leader>mh: toggle hunk fold under cursor
+    vim.keymap.set('n', '<leader>mh', function()
+        local cur_row = vim.api.nvim_win_get_cursor(0)[1]
+        local fold_start, fold_end, meta = hunk_fold_info_at(cur_row)
+        if fold_start then
+            toggle_fold(fold_start, fold_end, meta)
+        else
+            vim.notify('No hunk at cursor position', vim.log.levels.WARN)
+        end
+    end, { buffer = bufnr, silent = true })
     help.register_keybind(bufnr, '<leader>mh', 'fold/unfold hunk', 'keybind')
-    vim.keymap.set('n', 'zc', fold_hunk_at_cursor, { buffer = bufnr, silent = true })
-    help.register_keybind(bufnr, 'zc', 'fold/unfold hunk', 'keybind')
+    -- zc: only closes the hunk fold (never opens/deletes)
+    vim.keymap.set('n', 'zc', function()
+        local cur_row = vim.api.nvim_win_get_cursor(0)[1]
+        local fold_start, fold_end, meta = hunk_fold_info_at(cur_row)
+        if fold_start then
+            close_fold(fold_start, fold_end, meta)
+        end
+    end, { buffer = bufnr, silent = true })
+    help.register_keybind(bufnr, 'zc', 'fold hunk', 'keybind')
 
     -- <Tab>: open closed fold recursively
     vim.keymap.set('n', '<Tab>', function()
