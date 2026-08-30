@@ -778,15 +778,24 @@ M.setup_fold_navigation = function(bufnr)
     end
 
     -- Creates a fold over [start_row, end_row] and stores metadata.
-    -- If metadata already exists at start_row, removes the fold instead (toggle).
+    -- If the fold is currently closed, deletes it (toggle off).
+    -- If the fold was opened with zo, re-closes it.
     local apply_fold = function(start_row, end_row, meta)
         if not M._fold_metadata[bufnr] then
             M._fold_metadata[bufnr] = {}
         end
         if M._fold_metadata[bufnr][start_row] then
-            vim.cmd(start_row .. ',' .. end_row .. 'foldopen!')
-            vim.cmd(start_row .. ',' .. end_row .. 'folddelete')
-            M._fold_metadata[bufnr][start_row] = nil
+            if vim.fn.foldclosed(start_row) ~= -1 then
+                -- Fold is closed → toggle off: delete it
+                local save_pos = vim.api.nvim_win_get_cursor(0)
+                vim.api.nvim_win_set_cursor(0, { start_row, 0 })
+                vim.cmd('normal! zD')
+                vim.api.nvim_win_set_cursor(0, save_pos)
+                M._fold_metadata[bufnr][start_row] = nil
+            else
+                -- Fold was opened with zo → re-close it
+                vim.cmd(start_row .. 'foldclose')
+            end
             return
         end
         vim.cmd(start_row .. ',' .. end_row .. 'fold')
