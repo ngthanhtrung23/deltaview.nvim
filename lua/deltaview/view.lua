@@ -8,6 +8,10 @@ local _cmdline_cr_registered = false
 M._refresh_fns = {}
 --- @type table<number, fun(cur_row: number, target_line: number): number|nil>
 M._line_redirect_handlers = {}
+--- Fold metadata keyed by bufnr → foldstart_row → metadata table.
+--- Read by deltaview_foldtext() to render the summary line.
+--- @type table<number, table<number, {kind: string, label: string, added: number, removed: number, line_count: number}>>
+M._fold_metadata = {}
 --- @type {rel_path: string|nil, new_line_num: number, data_idx: number} | nil
 M._post_revert_target = nil
 
@@ -29,6 +33,7 @@ M.deltaview_file = function(ref)
     M.setup_hunk_navigation(diff_bufnr)
     M.setup_winbar(diff_bufnr)
     M.setup_line_number_redirect(diff_bufnr)
+    M.setup_fold_navigation(diff_bufnr)
     local nav_back_and_place_cursor = M.get_delta_buffer_cursor_exit_strategy(diff_bufnr, 0, cur_bufnr)
     if nav_back_and_place_cursor == nil then
         return
@@ -73,6 +78,7 @@ M.delta_path = function(ref, context, path)
     M.setup_hunk_navigation(diff_bufnr)
     M.setup_winbar(diff_bufnr)
     M.setup_line_number_redirect(diff_bufnr)
+    M.setup_fold_navigation(diff_bufnr)
     local nav_back_and_place_cursor = M.get_delta_buffer_cursor_exit_strategy(diff_bufnr, 0)
     if nav_back_and_place_cursor == nil then
         return
@@ -717,6 +723,155 @@ M.setup_line_number_redirect = function(bufnr)
         callback = function()
             M._line_redirect_handlers[bufnr] = nil
         end,
+    })
+end
+
+--- Called by Neovim as the foldtext for deltaview diff buffers.
+--- Reads fold metadata from M._fold_metadata to produce a summary line.
+--- @return string
+M.deltaview_foldtext = function()
+    local bufnr  = vim.api.nvim_get_current_buf()
+    local fstart = vim.v.foldstart
+    local meta   = M._fold_metadata[bufnr] and M._fold_metadata[bufnr][fstart]
+    if not meta then return vim.fn.foldtext() end
+    local icon = meta.kind == 'file' and '' or '  '
+    return string.format('%s %s  · +%d -%d  [%d lines]',
+        icon, meta.label, meta.added, meta.removed, meta.line_count)
+end
+
+--- Sets up fold keybinds and options for a deltaview diff buffer.
+--- <leader>mf folds/unfolds the file section under cursor.
+--- <leader>mh folds/unfolds the hunk under cursor.
+--- <Tab> opens a closed fold recursively.
+--- @param bufnr number buf_id of the diff buffer
+M.setup_fold_navigation = function(bufnr)
+    local delta_dds = vim.b[bufnr].delta_diff_data_set
+    if not delta_dds then return end
+    --- @cast delta_dds DiffData[]
+
+    local win = vim.api.nvim_get_current_win()
+    vim.api.nvim_set_option_value('foldmethod',   'manual', { win = win })
+    vim.api.nvim_set_option_value('foldenable',   true,     { win = win })
+    vim.api.nvim_set_option_value('foldlevel',    99,       { win = win })
+    vim.api.nvim_set_option_value('foldminlines', 0,        { win = win })
+    vim.api.nvim_set_option_value('foldtext',
+        "v:lua.require('deltaview.view').deltaview_foldtext()", { win = win })
+
+    -- Returns {start_row, end_row, diff_data}[] for each file section.
+    local get_file_sections = function()
+        local sections = {}
+        local prev_last_row = 0
+        for _, diff_data in ipairs(delta_dds) do
+            local path = diff_data.new_path
+            if path and #diff_data.hunks > 0 then
+                local last_hunk = diff_data.hunks[#diff_data.hunks]
+                local end_row   = last_hunk.lines[#last_hunk.lines].formatted_diff_line_num + 1
+                table.insert(sections, {
+                    start_row = prev_last_row + 1,
+                    end_row   = end_row,
+                    diff_data = diff_data,
+                })
+                prev_last_row = end_row
+            end
+        end
+        return sections
+    end
+
+    -- Creates a fold over [start_row, end_row] and stores metadata.
+    -- If metadata already exists at start_row, removes the fold instead (toggle).
+    local apply_fold = function(start_row, end_row, meta)
+        if not M._fold_metadata[bufnr] then
+            M._fold_metadata[bufnr] = {}
+        end
+        if M._fold_metadata[bufnr][start_row] then
+            vim.cmd(start_row .. ',' .. end_row .. 'foldopen!')
+            vim.cmd(start_row .. ',' .. end_row .. 'folddelete')
+            M._fold_metadata[bufnr][start_row] = nil
+            return
+        end
+        vim.cmd(start_row .. ',' .. end_row .. 'fold')
+        vim.cmd(start_row .. 'foldclose')
+        M._fold_metadata[bufnr][start_row] = meta
+    end
+
+    -- <leader>mf: fold/unfold the file section under cursor
+    vim.keymap.set('n', '<leader>mf', function()
+        local cur_row  = vim.api.nvim_win_get_cursor(0)[1]
+        local sections = get_file_sections()
+        for _, s in ipairs(sections) do
+            if cur_row >= s.start_row and cur_row <= s.end_row then
+                local added, removed = 0, 0
+                for _, hunk in ipairs(s.diff_data.hunks) do
+                    for _, line in ipairs(hunk.lines) do
+                        if line.line_type == 'added' then added = added + 1
+                        elseif line.line_type == 'removed' then removed = removed + 1
+                        end
+                    end
+                end
+                apply_fold(s.start_row, s.end_row, {
+                    kind       = 'file',
+                    label      = s.diff_data.new_path,
+                    added      = added,
+                    removed    = removed,
+                    line_count = s.end_row - s.start_row + 1,
+                })
+                return
+            end
+        end
+        vim.notify('No file section at cursor', vim.log.levels.WARN)
+    end, { buffer = bufnr, silent = true })
+    help.register_keybind(bufnr, '<leader>mf', 'fold/unfold file section', 'keybind')
+
+    -- <leader>mh / zc: fold/unfold the hunk under cursor
+    local fold_hunk_at_cursor = function()
+        local cur_row = vim.api.nvim_win_get_cursor(0)[1]
+        for _, diff_data in ipairs(delta_dds) do
+            local is_multi      = #diff_data.hunks > 1
+            local header_offset = is_multi and 3 or 0
+            for hunk_idx, hunk in ipairs(diff_data.hunks) do
+                if #hunk.lines == 0 then goto next_hunk end
+                local content_start = hunk.lines[1].formatted_diff_line_num + 1
+                local fold_start    = content_start - header_offset
+                local fold_end      = hunk.lines[#hunk.lines].formatted_diff_line_num + 1
+                if cur_row >= fold_start and cur_row <= fold_end then
+                    local added, removed = 0, 0
+                    for _, line in ipairs(hunk.lines) do
+                        if line.line_type == 'added' then added = added + 1
+                        elseif line.line_type == 'removed' then removed = removed + 1
+                        end
+                    end
+                    local label = string.format('hunk %d/%d @ line %d',
+                        hunk_idx, #diff_data.hunks, hunk.new_start or content_start)
+                    apply_fold(fold_start, fold_end, {
+                        kind       = 'hunk',
+                        label      = (diff_data.new_path or '') .. '  ' .. label,
+                        added      = added,
+                        removed    = removed,
+                        line_count = fold_end - fold_start + 1,
+                    })
+                    return
+                end
+                ::next_hunk::
+            end
+        end
+        vim.notify('No hunk at cursor position', vim.log.levels.WARN)
+    end
+    vim.keymap.set('n', '<leader>mh', fold_hunk_at_cursor, { buffer = bufnr, silent = true })
+    help.register_keybind(bufnr, '<leader>mh', 'fold/unfold hunk', 'keybind')
+    vim.keymap.set('n', 'zc', fold_hunk_at_cursor, { buffer = bufnr, silent = true })
+    help.register_keybind(bufnr, 'zc', 'fold/unfold hunk', 'keybind')
+
+    -- <Tab>: open closed fold recursively
+    vim.keymap.set('n', '<Tab>', function()
+        if vim.fn.foldclosed(vim.api.nvim_win_get_cursor(0)[1]) ~= -1 then
+            vim.cmd('normal! zO')
+        end
+    end, { buffer = bufnr, silent = true })
+    help.register_keybind(bufnr, '<Tab>', 'open fold recursively', 'keybind')
+
+    vim.api.nvim_create_autocmd('BufUnload', {
+        buffer = bufnr, once = true,
+        callback = function() M._fold_metadata[bufnr] = nil end,
     })
 end
 
