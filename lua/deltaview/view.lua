@@ -817,13 +817,33 @@ M.setup_fold_navigation = function(bufnr)
     end
 
     -- Returns hunk fold bounds + metadata for the hunk under cur_row, or nil.
+    -- Uses no_context_delta_diff_data_set so that fold boundaries match the visual
+    -- hunks seen by ]c/[c navigation (each contiguous block of changes), not the
+    -- larger full-dataset hunks that merge nearby changes via context lines.
     local hunk_fold_info_at = function(cur_row)
+        local nc_dds = vim.b[bufnr].no_context_delta_diff_data_set
+        if not nc_dds then return nil end
+
+        -- Map each full-dataset hunk's first DiffLine object to the header offset
+        -- that hunk contributes (3 lines of fence/header if the file is multi-hunk,
+        -- else 0). The no-context sub-hunk whose first line matches the full-dataset
+        -- hunk's first line inherits that offset; other sub-hunks get 0.
+        local first_line_to_header_offset = {}
         for _, diff_data in ipairs(delta_dds) do
-            local is_multi      = #diff_data.hunks > 1
-            local header_offset = is_multi and 3 or 0
-            for hunk_idx, hunk in ipairs(diff_data.hunks) do
+            local offset = #diff_data.hunks > 1 and 3 or 0
+            for _, hunk in ipairs(diff_data.hunks) do
+                if #hunk.lines > 0 then
+                    first_line_to_header_offset[hunk.lines[1]] = offset
+                end
+            end
+        end
+
+        for file_idx, nc_diff_data in ipairs(nc_dds) do
+            local total_hunks = #nc_diff_data.hunks
+            for hunk_idx, hunk in ipairs(nc_diff_data.hunks) do
                 if #hunk.lines == 0 then goto next_hunk end
                 local content_start = hunk.lines[1].formatted_diff_line_num + 1
+                local header_offset = first_line_to_header_offset[hunk.lines[1]] or 0
                 local fold_start    = content_start - header_offset
                 local fold_end      = hunk.lines[#hunk.lines].formatted_diff_line_num + 1
                 if cur_row >= fold_start and cur_row <= fold_end then
@@ -833,11 +853,12 @@ M.setup_fold_navigation = function(bufnr)
                         elseif line.line_type == 'removed' then removed = removed + 1
                         end
                     end
+                    local filepath = delta_dds[file_idx] and delta_dds[file_idx].new_path or ''
                     local label = string.format('hunk %d/%d @ line %d',
-                        hunk_idx, #diff_data.hunks, hunk.new_start or content_start)
+                        hunk_idx, total_hunks, hunk.lines[1].new_line_num or content_start)
                     return fold_start, fold_end, {
                         kind       = 'hunk',
-                        label      = (diff_data.new_path or '') .. '  ' .. label,
+                        label      = filepath .. '  ' .. label,
                         added      = added,
                         removed    = removed,
                         line_count = fold_end - fold_start + 1,
