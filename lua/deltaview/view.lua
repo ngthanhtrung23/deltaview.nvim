@@ -898,7 +898,42 @@ M.setup_fold_navigation = function(bufnr)
     end, { buffer = bufnr, silent = true })
     help.register_keybind(bufnr, '<leader>mf', 'fold/unfold file section', 'keybind')
 
-    -- <leader>mh: toggle hunk fold under cursor
+    -- Like hunk_fold_info_at but uses the full delta_dds dataset, so the fold
+    -- range includes the header fences and surrounding context lines.
+    local context_hunk_fold_info_at = function(cur_row)
+        for file_idx, diff_data in ipairs(delta_dds) do
+            local is_multi      = #diff_data.hunks > 1
+            local header_offset = is_multi and 3 or 0
+            for hunk_idx, hunk in ipairs(diff_data.hunks) do
+                if #hunk.lines == 0 then goto next_hunk end
+                local content_start = hunk.lines[1].formatted_diff_line_num + 1
+                local fold_start    = content_start - header_offset
+                local fold_end      = hunk.lines[#hunk.lines].formatted_diff_line_num + 1
+                if cur_row >= fold_start and cur_row <= fold_end then
+                    local added, removed = 0, 0
+                    for _, line in ipairs(hunk.lines) do
+                        if line.line_type == 'added' then added = added + 1
+                        elseif line.line_type == 'removed' then removed = removed + 1
+                        end
+                    end
+                    local filepath = delta_dds[file_idx] and delta_dds[file_idx].new_path or ''
+                    local label = string.format('context %d/%d @ line %d',
+                        hunk_idx, #diff_data.hunks, hunk.lines[1].new_line_num or content_start)
+                    return fold_start, fold_end, {
+                        kind       = 'hunk',
+                        label      = filepath .. '  ' .. label,
+                        added      = added,
+                        removed    = removed,
+                        line_count = fold_end - fold_start + 1,
+                    }
+                end
+                ::next_hunk::
+            end
+        end
+        return nil
+    end
+
+    -- <leader>mh: toggle hunk fold under cursor (changed lines only, no context)
     vim.keymap.set('n', '<leader>mh', function()
         local cur_row = vim.api.nvim_win_get_cursor(0)[1]
         local fold_start, fold_end, meta = hunk_fold_info_at(cur_row)
@@ -909,6 +944,19 @@ M.setup_fold_navigation = function(bufnr)
         end
     end, { buffer = bufnr, silent = true })
     help.register_keybind(bufnr, '<leader>mh', 'fold/unfold hunk', 'keybind')
+
+    -- <leader>mc: toggle context fold (header + context lines + changed lines)
+    vim.keymap.set('n', '<leader>mc', function()
+        local cur_row = vim.api.nvim_win_get_cursor(0)[1]
+        local fold_start, fold_end, meta = context_hunk_fold_info_at(cur_row)
+        if fold_start then
+            toggle_fold(fold_start, fold_end, meta)
+        else
+            vim.notify('No hunk at cursor position', vim.log.levels.WARN)
+        end
+    end, { buffer = bufnr, silent = true })
+    help.register_keybind(bufnr, '<leader>mc', 'fold/unfold hunk with context', 'keybind')
+
     -- zc: only closes the hunk fold (never opens/deletes)
     vim.keymap.set('n', 'zc', function()
         local cur_row = vim.api.nvim_win_get_cursor(0)[1]
