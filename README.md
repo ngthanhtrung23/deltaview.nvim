@@ -8,7 +8,7 @@ An inline git diff viewer for Neovim with two-tier diff highlighting and syntax 
 
 Alternative inline/unified diff viewers in the neovim plugin ecosystem tend to use virtual lines to display negative changes. Cursors cannot land on virtual lines, which disrupts scrolling. You cannot yank lines of code that were deleted. With a large block of negative changes that does not fit in the window's viewport, you cannot see the full extent of the changes.
 
-This plugin creates inline diffs as readonly, separate buffers without virtual lines. You are able to use lsp features while reviewing changes, yank deleted lines of code, and navigate around a pull request as you would your normal files. 
+This plugin creates inline diffs as readonly, separate buffers without virtual lines. You are able to use lsp features while reviewing changes, yank deleted lines of code, and navigate around a pull request as you would your normal files.
 
 The key to what allows this approach to achieve (workflow wise) what other plugins achieve by creating diffs as highlights + virtual lines inside your buffers is the cursor placement, that allows you to jump into (and out of) a diff without losing your spot.
 
@@ -30,7 +30,11 @@ https://github.com/user-attachments/assets/4035f361-e890-41c4-8b82-f57f5491b665
 - **Inline diff viewing**: Lay lightweight diffs over your buffers to quickly view and unview changes
 - **Two-tier highlighting**: Two tier diff highlighting, treesitter syntax highlighting
 - **Cursor maintenance**: Opening a diff keeps your cursor where it was, and exiting a diff keeps your cursor where it was. Easily transition between reading and writing.
-- **Quick Navigation**: Jump to the next hunk with `<Tab>`. Review all changes in a PR using the quickfix list workflow (`:DeltaMenu!`). Integration with popular fuzzy finders to find files that have been modified.
+- **Quick Navigation**: Jump between hunks with `]c` / `[c`. Review all changes in a PR using the quickfix list workflow (`:DeltaMenu!`). Integration with popular fuzzy finders to find files that have been modified.
+- **Sticky filename**: A winbar always shows which file the cursor is currently in when viewing a multi-file diff.
+- **Source line navigation**: Type `:123` inside a diff buffer to jump to source line 123. If that line is not visible in the diff, the cursor does not move.
+- **Mark as Viewed**: Fold individual hunks (`<leader>mh` / `zc`) or entire file sections (`<leader>mf`) to a single summary line. Press `<Tab>` to unfold recursively.
+- **Hunk Revert**: Revert the hunk under cursor back to HEAD with `<leader>hu`.
 - **Smart sorting**: Files opened by the picker are sorted by quantity of changes, allowing you to review the most important files first.
 - **Custom Context**: Choose how many lines of context to see when diffing a path. No folds to interfere with smooth scrolling.
 - **Flexible comparisons**: Compare against any git ref (HEAD, branches, commits, tags)
@@ -106,43 +110,34 @@ vim.cmd([[cabbrev dv DeltaView]])
 vim.cmd([[cabbrev da Delta . 3]])
 ```
 
-*NOTE*: 
+*NOTE*:
 - All commands use the last ref used. If `:DeltaMenu main` was used, future calls to `:DeltaMenu`, `:DeltaView`, and `:Delta` will default to `main` instead of `HEAD`.
 - All support special git syntaxes (e.g. `develop...HEAD` for the symmetric difference, or "what did this branch introduce")
 
 ### Keybinds
 
-This plugin comes prepackaged with some default keybinds, which are viewable by using the `d?` keybind when on a a buffer created by `:Delta` or `:DeltaView`.
+This plugin comes prepackaged with some default keybinds, which are viewable by using the `d?` keybind when on a buffer created by `:Delta` or `:DeltaView`.
 
-Global keybindings:
+Global keybindings (none by default — set via `keyconfig` in setup):
 
 | Key           | Action        |
 | ------------- | ---------     |
-| `<leader>dl`  | :DeltaView    |
-| `<leader>dm`  | :DeltaMenu    |
-| `<leader>da`  | :Delta        |
+| *(unset)*     | :DeltaView    |
+| *(unset)*     | :DeltaMenu    |
+| *(unset)*     | :Delta        |
 
 When viewing a diff (DeltaView or Delta):
 
-| Key           | Action                                    |
-| ------------- | ----------------------------------------- |
-| `<Esc>` or `q`| Return to source file                     |
-| `<Tab>`       | Next hunk                                 |
-| `<S-Tab>`     | Previous hunk                             |
-| `d?`          | Open the help legend                      |
-
-*NOTE*
-- `<Tab>` and `<Shift-Tab>` deviate from the original neovim diff motions of 
-`]c` and `[c`. These keys behave differently; no count support for deltaview's
-next hunk (meaning no equivalent to 3]c for "jump 3 hunks"), and deltaview's
-next hunk will cycle: if you are on the last hunk, you jump to the
-first hunk with the next `<Tab>`. Furthermore, I just prefer the tabindex like
-motions, which require one hand. If you prefer the original motions, overwrite
-`keyconfig.next_hunk` and `keyconfig.prev_hunk` in |deltaview-configuration|
-
-- `<Tab` overwrites the default vim motion `<Tab>` (see `:h <Tab>`), which is
-just an alternative for `CTRL-I`. If this is an issue for your workflow, 
-please overwrite the configuration.
+| Key              | Action                                       |
+| ---------------- | -------------------------------------------- |
+| `q`              | Return to source file                        |
+| `]c`             | Next hunk (scrolls hunk header to top)       |
+| `[c`             | Previous hunk (scrolls hunk header to top)   |
+| `<leader>hu`     | Revert hunk under cursor to HEAD             |
+| `<leader>mh` / `zc` | Fold/unfold hunk under cursor            |
+| `<leader>mf`     | Fold/unfold file section under cursor        |
+| `<Tab>`          | Open fold under cursor recursively           |
+| `d?`             | Open the help legend                         |
 
 When the DeltaMenu quickfix list is open (:DeltaMenu!):
 
@@ -186,18 +181,18 @@ require('deltaview').setup({
 
     -- custom keybindings
     keyconfig = {
-        -- global keybind to toggle DeltaMenu
+        -- global keybind to toggle DeltaMenu (empty string = disabled)
         dm_toggle_keybind = "<leader>dm",
 
-        -- global keybind to toggle DeltaView (and exit diff if open)
+        -- global keybind to toggle DeltaView (empty string = disabled)
         dv_toggle_keybind = "<leader>dl",
 
-        -- global keybind to toggle Delta (and exit diff if open)
+        -- global keybind to toggle Delta (empty string = disabled)
         d_toggle_keybind = "<leader>da",
 
         -- navigate between hunks in a diff
-        next_hunk = "<Tab>",
-        prev_hunk = "<S-Tab>",
+        next_hunk = "]c",
+        prev_hunk = "[c",
 
         -- open help legend
         help_legend = "d?"
