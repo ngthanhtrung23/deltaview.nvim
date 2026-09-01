@@ -461,7 +461,18 @@ M.get_delta_buffer_cursor_exit_strategy = function(bufnr, winnr, alternative_buf
                     end
                 end
             end
-            -- cursor is on a title/fence line with no associated file — close the diff buffer
+            -- cursor is on a title/fence line with no associated file — close the diff buffer.
+            -- If other windows still show the same buffer, only switch this window away
+            -- rather than deleting the shared buffer (which would close all windows).
+            if #vim.fn.win_findbuf(bufnr) > 1 then
+                local alt = vim.fn.bufnr('#')
+                if alt ~= -1 and alt ~= bufnr then
+                    vim.api.nvim_set_current_buf(alt)
+                else
+                    vim.cmd('bprevious')
+                end
+                return true
+            end
             local success, err = pcall(vim.api.nvim_buf_delete, bufnr, { force = true })
             if not success then
                 vim.notify('Failed to close diff buffer: ' .. tostring(err), vim.log.levels.ERROR)
