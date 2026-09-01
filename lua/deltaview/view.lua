@@ -992,6 +992,20 @@ M.setup_hunk_navigation = function(bufnr)
         M.jump_to_hunk(bufnr, false)
     end, { buffer = bufnr, silent = true })
     help.register_keybind(bufnr, config.options.keyconfig.prev_hunk, 'jump to previous hunk', 'keybind')
+
+    if config.options.keyconfig.next_diff and config.options.keyconfig.next_diff ~= '' then
+        vim.keymap.set('n', config.options.keyconfig.next_diff, function()
+            M.jump_to_file(bufnr, true)
+        end, { buffer = bufnr, silent = true })
+        help.register_keybind(bufnr, config.options.keyconfig.next_diff, 'jump to next file', 'keybind')
+    end
+
+    if config.options.keyconfig.prev_diff and config.options.keyconfig.prev_diff ~= '' then
+        vim.keymap.set('n', config.options.keyconfig.prev_diff, function()
+            M.jump_to_file(bufnr, false)
+        end, { buffer = bufnr, silent = true })
+        help.register_keybind(bufnr, config.options.keyconfig.prev_diff, 'jump to previous file', 'keybind')
+    end
 end
 
 --- jumps to a hunk when user is on a diff buffer
@@ -1089,6 +1103,77 @@ M.jump_to_hunk = function(bufnr, forward)
         end
     end
     vim.notify('No more hunks', vim.log.levels.INFO)
+end
+
+--- Jumps to the next or previous file section in a diff buffer.
+--- Scrolls the file title to the top of the window and places the cursor on the
+--- first changed line of that file, mirroring the behaviour of jump_to_hunk.
+--- @param bufnr number
+--- @param forward boolean
+M.jump_to_file = function(bufnr, forward)
+    local delta_diff_data_set = vim.b[bufnr].delta_diff_data_set
+    local no_context_dds      = vim.b[bufnr].no_context_delta_diff_data_set
+    if not delta_diff_data_set then return end
+
+    local cur_row = vim.api.nvim_win_get_cursor(0)[1]
+
+    -- Build file sections list (same boundary logic as get_file_sections).
+    local sections = {}
+    local prev_last_row = 0
+    for i, diff_data in ipairs(delta_diff_data_set) do
+        if diff_data.new_path and #diff_data.hunks > 0 then
+            local last_hunk = diff_data.hunks[#diff_data.hunks]
+            local end_row   = last_hunk.lines[#last_hunk.lines].formatted_diff_line_num + 1
+            table.insert(sections, {
+                start_row = prev_last_row + 1,
+                end_row   = end_row,
+                data_idx  = i,
+            })
+            prev_last_row = end_row
+        end
+    end
+
+    if #sections == 0 then return end
+
+    -- Find which section the cursor is currently in.
+    local cur_section_idx = nil
+    for i, s in ipairs(sections) do
+        if cur_row >= s.start_row and cur_row <= s.end_row then
+            cur_section_idx = i
+            break
+        end
+    end
+
+    -- Pick the target section.
+    local target
+    if forward then
+        local next_idx = cur_section_idx and cur_section_idx + 1 or 1
+        target = sections[next_idx]
+    else
+        local prev_idx = cur_section_idx and cur_section_idx - 1 or #sections
+        target = sections[prev_idx]
+    end
+
+    if not target then
+        vim.notify('No more files', vim.log.levels.INFO)
+        return
+    end
+
+    -- Find the first changed line in the target file section.
+    local first_changed_row = nil
+    if no_context_dds then
+        local nc = no_context_dds[target.data_idx]
+        if nc and #nc.hunks > 0 and #nc.hunks[1].lines > 0 then
+            first_changed_row = nc.hunks[1].lines[1].formatted_diff_line_num + 1
+        end
+    end
+
+    -- Scroll file title to top, then move cursor to first changed line.
+    vim.api.nvim_win_set_cursor(0, { target.start_row, 0 })
+    vim.cmd('normal! zt')
+    if first_changed_row then
+        vim.api.nvim_win_set_cursor(0, { first_changed_row, 0 })
+    end
 end
 
 --- Reverts the hunk under the cursor by applying the inverse patch via git apply.
