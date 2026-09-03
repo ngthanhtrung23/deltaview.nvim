@@ -1082,6 +1082,10 @@ M.jump_to_hunk = function(bufnr, forward)
                         hunk_line.lines[1].old_line_num == real_buf_line.old_line_num
                     then
                         local target_lnum = real_buf_line.formatted_diff_line_num + 1
+                        -- Skip hunks that are inside a closed fold.
+                        if vim.fn.foldclosed(target_lnum) ~= -1 then
+                            goto continue
+                        end
                         local header_lnum = lines[1].formatted_diff_line_num + 1
                         vim.api.nvim_win_set_cursor(0, { header_lnum, 0 })
                         vim.cmd('normal! zt')
