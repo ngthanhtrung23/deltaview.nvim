@@ -516,7 +516,12 @@ M.setup_delta_statuscolumn = function(bufnr, winid)
         bufnr, win, win, bufnr
     ))
 
-    local current_statuscolumn = vim.api.nvim_get_option_value('statuscolumn', { win = win })
+    local delta_statuscolumn_expr = '%{%v:lua.require("delta.statuscolumn").render(v:lnum)%}'
+    local saved_statuscolumn = vim.api.nvim_get_option_value('statuscolumn', { win = win })
+    -- If the window already has the delta statuscolumn (e.g. a second diff opened while a first
+    -- was still current), don't save it as the restore target — that would permanently set the
+    -- delta statuscolumn on the source buffer after the new diff closes. Restore to '' instead.
+    local current_statuscolumn = (saved_statuscolumn == delta_statuscolumn_expr) and '' or saved_statuscolumn
     local current_number = vim.api.nvim_get_option_value('number', { win = win })
     local current_relativenumber = vim.api.nvim_get_option_value('relativenumber', { win = win })
 
