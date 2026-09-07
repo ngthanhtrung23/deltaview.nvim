@@ -122,6 +122,12 @@ end
 --- @param use_treesitter boolean | nil
 --- @return table<number, LineHighlight[]> highlights key: 1-indexed line number of the diff
 M.get_highlights = function(adjacent_lines_sets, opts, language, use_treesitter)
+    -- Maximum number of changed lines in an adjacent block before skipping word-level
+    -- diff. Pairwise comparison is O(added × removed), so a block of 200 lines can
+    -- produce up to 10,000 Levenshtein calls — acceptable. Beyond that it becomes
+    -- too slow to run synchronously on the main thread.
+    local max_lines_for_word_diff = (opts and opts.highlighting and opts.highlighting.max_lines_for_word_diff) or 200
+
     local highlights = {}
     for _, adjacent_lines in ipairs(adjacent_lines_sets) do
         -- sort keys so we can iterate the adjacents ino rder
@@ -130,6 +136,11 @@ M.get_highlights = function(adjacent_lines_sets, opts, language, use_treesitter)
             table.insert(keys, k)
         end
         table.sort(keys)
+
+        -- Skip word-level diff for very large blocks to avoid O(n²) slowdown.
+        if #keys > max_lines_for_word_diff then
+            goto next_adjacent_block
+        end
 
         -- found pairs shouldn't be calculated again
         local tested_pairs = {}
@@ -229,6 +240,7 @@ M.get_highlights = function(adjacent_lines_sets, opts, language, use_treesitter)
                 ::continue::
             end
         end
+        ::next_adjacent_block::
     end
     return highlights
 end
