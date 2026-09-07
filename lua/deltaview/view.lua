@@ -16,6 +16,50 @@ M._fold_metadata = {}
 M._post_revert_target = nil
 
 --- deltaview file diff buffer orchestrator, opens a deltaview diff on top of current window
+--- Applies all diff highlights to a buffer (artifact decorations, syntax, word-level diff).
+--- @param bufnr number
+--- Automatically folds file sections whose changed-line count exceeds the threshold.
+--- Called after setup_fold_navigation so that fold options are already configured.
+--- Uses the same fold metadata as manual folds, so foldtext and toggle all work normally.
+--- @param bufnr number
+M.auto_fold_large_files = function(bufnr)
+    local threshold = 2000
+    local delta_dds = vim.b[bufnr].delta_diff_data_set
+    if not delta_dds then return end
+
+    local prev_last_row = 0
+    for _, diff_data in ipairs(delta_dds) do
+        if not (diff_data.new_path and #diff_data.hunks > 0) then goto next_file end
+        local last_hunk = diff_data.hunks[#diff_data.hunks]
+        local end_row   = last_hunk.lines[#last_hunk.lines].formatted_diff_line_num + 1
+        local start_row = prev_last_row + 1
+        prev_last_row   = end_row
+
+        local added, removed = 0, 0
+        for _, hunk in ipairs(diff_data.hunks) do
+            for _, line in ipairs(hunk.lines) do
+                if line.line_type == 'added' then added = added + 1
+                elseif line.line_type == 'removed' then removed = removed + 1
+                end
+            end
+        end
+
+        if added + removed > threshold then
+            if not M._fold_metadata[bufnr] then M._fold_metadata[bufnr] = {} end
+            vim.cmd(start_row .. ',' .. end_row .. 'fold')
+            vim.cmd(start_row .. 'foldclose')
+            M._fold_metadata[bufnr][start_row] = {
+                kind       = 'file',
+                label      = diff_data.new_path,
+                added      = added,
+                removed    = removed,
+                line_count = end_row - start_row + 1,
+            }
+        end
+        ::next_file::
+    end
+end
+
 --- @param ref string git ref to compare against. Can be branch, commit, tag, etc.
 --- @return number | nil bufnr buf id of diff buffer
 M.deltaview_file = function(ref)
@@ -34,6 +78,7 @@ M.deltaview_file = function(ref)
     M.setup_winbar(diff_bufnr)
     M.setup_line_number_redirect(diff_bufnr)
     M.setup_fold_navigation(diff_bufnr)
+    M.auto_fold_large_files(diff_bufnr)
     local nav_back_and_place_cursor = M.get_delta_buffer_cursor_exit_strategy(diff_bufnr, 0, cur_bufnr)
     if nav_back_and_place_cursor == nil then
         return
@@ -79,6 +124,7 @@ M.delta_path = function(ref, context, path)
     M.setup_winbar(diff_bufnr)
     M.setup_line_number_redirect(diff_bufnr)
     M.setup_fold_navigation(diff_bufnr)
+    M.auto_fold_large_files(diff_bufnr)
     local nav_back_and_place_cursor = M.get_delta_buffer_cursor_exit_strategy(diff_bufnr, 0)
     if nav_back_and_place_cursor == nil then
         return
@@ -245,7 +291,7 @@ M.open_git_diff_buffer_for_path = function(path, ref, context, winnr, buf_name, 
         return
     end
     delta.highlight_delta_artifacts(bufnr)
-    delta.syntax_highlight_diff_set(bufnr)
+    delta.syntax_highlight_git_diff(bufnr)
     delta.diff_highlight_diff(bufnr)
     if config.options.line_numbers then
         delta.setup_delta_statuscolumn(bufnr)
