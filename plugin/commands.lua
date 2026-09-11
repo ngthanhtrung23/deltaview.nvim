@@ -52,7 +52,7 @@ end
 
 -- :Diff command — view current file's diff vs merge-base of <ref>
 vim.api.nvim_create_user_command('Diff', function(args)
-    local ref = args.args ~= '' and args.args or 'master'
+    local ref = args.args ~= '' and args.args or 'origin/master'
     local base = get_merge_base(ref)
     if base == nil then return end
     local ok, err = pcall(require('deltaview.view').deltaview_file, base)
@@ -67,7 +67,7 @@ end, {
 
 -- :Diffall command — view all changed files' diffs vs merge-base of <ref>
 vim.api.nvim_create_user_command('Diffall', function(args)
-    local ref = args.args ~= '' and args.args or 'master'
+    local ref = args.args ~= '' and args.args or 'origin/master'
     local base = get_merge_base(ref)
     if base == nil then return end
     local state = require('deltaview.state')

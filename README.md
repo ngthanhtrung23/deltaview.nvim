@@ -41,12 +41,12 @@ Another notable design difference from other diff viewers is the two tier highli
 
 #### `:Diff [ref]`
 
-Opens the diff view for the current file against the merge-base of `<ref>` and `HEAD`. This is equivalent to `git diff <ref>...HEAD` for the current file — i.e., "what changes did I make relative to where I branched off from `<ref>`?" Defaults to `master` if no ref is given.
+Opens the diff view for the current file against the merge-base of `<ref>` and `HEAD`. This is equivalent to `git diff <ref>...HEAD` for the current file — i.e., "what changes did I make relative to where I branched off from `<ref>`?" Defaults to `origin/master` if no ref is given.
 
 The cursor is placed at the matching location on entry and restored on exit.
 
 ```vim
-:Diff                   " Compare current file vs merge-base of master
+:Diff                   " Compare current file vs merge-base of origin/master
 :Diff HEAD              " Compare current file vs HEAD
 :Diff develop           " Compare vs merge-base of develop branch
 :Diff abc1234           " Compare vs merge-base of a specific commit
@@ -54,7 +54,7 @@ The cursor is placed at the matching location on entry and restored on exit.
 
 #### `:Diffall [ref]`
 
-Opens the diff view for all changed files in the current working directory against the merge-base of `<ref>` and `HEAD`. Same merge-base semantics as `:Diff`. Defaults to `master`.
+Opens the diff view for all changed files in the current working directory against the merge-base of `<ref>` and `HEAD`. Same merge-base semantics as `:Diff`. Defaults to `origin/master`.
 
 ```vim
 :Diffall                " Show all changed files vs merge-base of master
