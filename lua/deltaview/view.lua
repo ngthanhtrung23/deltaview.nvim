@@ -133,6 +133,42 @@ M.delta_path = function(ref, context, path)
 
     vim.keymap.set('n', 'q', nav_back_and_place_cursor, { buffer = diff_bufnr, silent = true })
     help.register_keybind(diff_bufnr, 'q', 'close diff and return to file', 'keybind')
+    vim.keymap.set('n', 'o', function()
+        local git_root = vim.b[diff_bufnr].git_root
+        local cp = M.cursor_placement
+        local filepath, target_line, target_col
+        if cp and cp.filepath and git_root then
+            filepath = git_root .. '/' .. cp.filepath
+            target_line = cp.cursor and cp.cursor[1]
+            target_col  = cp.cursor and cp.cursor[2]
+        else
+            -- cursor is on a title/fence line — fall back to first file in diff
+            local dds = vim.b[diff_bufnr].delta_diff_data_set
+            if dds and git_root then
+                for _, diff_data in ipairs(dds) do
+                    if diff_data.new_path then
+                        filepath = git_root .. '/' .. diff_data.new_path
+                        break
+                    end
+                end
+            end
+        end
+        if filepath == nil then
+            vim.notify('No file at cursor position', vim.log.levels.WARN)
+            return
+        end
+        local diff_win = vim.api.nvim_get_current_win()
+        local ok, err = pcall(vim.cmd, 'vs ' .. vim.fn.fnameescape(filepath))
+        if not ok then
+            vim.notify('Failed to open file: ' .. tostring(err), vim.log.levels.ERROR)
+            return
+        end
+        if target_line then
+            pcall(vim.api.nvim_win_set_cursor, 0, { target_line, target_col or 0 })
+        end
+        vim.api.nvim_win_close(diff_win, false)
+    end, { buffer = diff_bufnr, silent = true })
+    help.register_keybind(diff_bufnr, 'o', 'open file under cursor in vertical split', 'keybind')
     vim.keymap.set('n', '<leader>hu', function() M.revert_hunk_under_cursor(diff_bufnr) end, { buffer = diff_bufnr, silent = true })
     help.register_keybind(diff_bufnr, '<leader>hu', 'revert hunk under cursor', 'keybind')
     help.setup_help_keybind(diff_bufnr)
