@@ -655,6 +655,7 @@ M.setup_winbar = function(bufnr)
     -- the file header/separator rows (which precede the first hunk) are attributed
     -- to the correct file rather than the previous one.
     local file_ranges = {}
+    local file_stats = {}  -- path -> { added, removed }
     local prev_last_row = 0
     for _, diff_data in ipairs(delta_diff_data_set) do
         local path = diff_data.new_path
@@ -662,12 +663,36 @@ M.setup_winbar = function(bufnr)
             table.insert(file_ranges, { row = prev_last_row + 1, path = path })
             local last_hunk = diff_data.hunks[#diff_data.hunks]
             prev_last_row = last_hunk.lines[#last_hunk.lines].formatted_diff_line_num + 1
+            local added, removed = 0, 0
+            for _, hunk in ipairs(diff_data.hunks) do
+                for _, line in ipairs(hunk.lines) do
+                    if line.line_type == 'added' then added = added + 1
+                    elseif line.line_type == 'removed' then removed = removed + 1
+                    end
+                end
+            end
+            file_stats[path] = { added = added, removed = removed }
         end
     end
 
     -- Fallback for single-file text_diff buffers (no new_path in diff data)
     local static_path = vim.b[bufnr].source_filepath
     if #file_ranges == 0 and not static_path then return end
+
+    -- For single-file buffers, compute stats from the whole diff data set
+    if #file_ranges == 0 and static_path then
+        local added, removed = 0, 0
+        for _, diff_data in ipairs(delta_diff_data_set) do
+            for _, hunk in ipairs(diff_data.hunks or {}) do
+                for _, line in ipairs(hunk.lines or {}) do
+                    if line.line_type == 'added' then added = added + 1
+                    elseif line.line_type == 'removed' then removed = removed + 1
+                    end
+                end
+            end
+        end
+        file_stats[static_path] = { added = added, removed = removed }
+    end
 
     local get_path_at_row = function(row)
         if #file_ranges == 0 then return static_path end
@@ -687,7 +712,13 @@ M.setup_winbar = function(bufnr)
         if not vim.api.nvim_win_is_valid(win) then return end
         local row = vim.api.nvim_win_get_cursor(win)[1]
         local path = get_path_at_row(row)
-        vim.wo[win].winbar = path and (' ' .. path) or ''
+        if not path then
+            vim.wo[win].winbar = ''
+            return
+        end
+        local stats = file_stats[path]
+        local stats_str = stats and ('  +' .. stats.added .. ' -' .. stats.removed) or ''
+        vim.wo[win].winbar = ' ' .. path .. stats_str
     end
 
     update_winbar()
