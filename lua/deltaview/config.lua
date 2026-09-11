@@ -1,28 +1,5 @@
 local M = {}
 
-M.setup_keybinds = function()
-    -- :DeltaView global keybind
-    if M.options.keyconfig.dv_toggle_keybind ~= nil and M.options.keyconfig.dv_toggle_keybind ~= '' then
-        vim.keymap.set('n', M.options.keyconfig.dv_toggle_keybind, function()
-            vim.cmd('DeltaView')
-        end, { desc = "Toggle DeltaView" })
-    end
-
-    -- :DeltaMenu global keybind
-    if M.options.keyconfig.dm_toggle_keybind ~= nil and M.options.keyconfig.dm_toggle_keybind ~= '' then
-        vim.keymap.set('n', M.options.keyconfig.dm_toggle_keybind, function()
-            vim.cmd('DeltaMenu')
-        end, { desc = "Toggle DeltaView Menu" })
-    end
-
-    -- :Delta global keybind
-    if M.options.keyconfig.d_toggle_keybind ~= nil and M.options.keyconfig.d_toggle_keybind ~= '' then
-        vim.keymap.set('n', M.options.keyconfig.d_toggle_keybind, function()
-            vim.cmd('Delta')
-        end, { desc = "Toggle Delta" })
-    end
-end
-
 --- @type ViewConfig
 M.basic_viewconfig = {
     dot = "·",
@@ -56,9 +33,6 @@ M.defaults = {
     line_numbers = true,
     fzf_picker = nil,
     keyconfig = {
-        dm_toggle_keybind = "",
-        dv_toggle_keybind = "",
-        d_toggle_keybind = "",
         next_hunk = "]c",
         prev_hunk = "[c",
         next_diff = "]f",
@@ -96,9 +70,6 @@ end
 
 
 --- @class KeyConfig
---- @field dv_toggle_keybind string | nil if defined, will create keybind that runs DeltaView, and exits Diff buffer if open. By default, <leader>dv.
---- @field dm_toggle_keybind string | nil if defined, will create keybind that runs DeltaView Menu. By default, <leader>dm.
---- @field d_toggle_keybind string | nil if defined, will create keybind that runs Delta, and exits Diff buffer if open
 --- @field next_hunk string skip to next hunk in diff. Defaults to ]c.
 --- @field prev_hunk string skip to prev hunk in diff. Defaults to [c.
 --- @field help_legend string opens the help legend when inside a deltaview buffer

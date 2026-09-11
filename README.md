@@ -14,137 +14,71 @@ The key to what allows this approach to achieve (workflow wise) what other plugi
 
 Another notable design difference from other diff viewers is the two tier highlighting. Instead of character level diffing, it is word level diffing, and more precisely, it is token level diffing. Token parsing is achieved using the same Tree-sitter parser used for highlighting, resulting in less noisy second tier highlights.
 
-## Demos
-
-### :DeltaView demo
-https://github.com/user-attachments/assets/6a28f113-9462-4568-93ca-6db6e7f8be97
-
-### :Delta demo
-https://github.com/user-attachments/assets/9695e4ac-b858-41fd-9eb2-c082636dde2c
-
-### :DeltaMenu demo
-https://github.com/user-attachments/assets/4035f361-e890-41c4-8b82-f57f5491b665
-
 ## Features
 
 - **Inline diff viewing**: Lay lightweight diffs over your buffers to quickly view and unview changes
 - **Two-tier highlighting**: Two tier diff highlighting, treesitter syntax highlighting
 - **Cursor maintenance**: Opening a diff keeps your cursor where it was, and exiting a diff keeps your cursor where it was. Easily transition between reading and writing.
-- **Quick Navigation**: Jump between hunks with `]c` / `[c`. Review all changes in a PR using the quickfix list workflow (`:DeltaMenu!`). Integration with popular fuzzy finders to find files that have been modified.
+- **Quick Navigation**: Jump between hunks with `]c` / `[c`, between files with `]f` / `[f`
 - **Sticky filename**: A winbar always shows which file the cursor is currently in when viewing a multi-file diff.
 - **Source line navigation**: Type `:123` inside a diff buffer to jump to source line 123. If that line is not visible in the diff, the cursor does not move.
-- **Mark as Viewed**: Fold individual hunks (`<leader>mh` / `zc`) or entire file sections (`<leader>mf`) to a single summary line. Press `<Tab>` to unfold recursively.
+- **Mark as Viewed**: Fold individual hunks (`<leader>mh` / `zc`), hunks with context (`<leader>mc`), or entire file sections (`<leader>mf`) to a single summary line. Press `<Tab>` to unfold recursively.
 - **Hunk Revert**: Revert the hunk under cursor back to HEAD with `<leader>hu`.
-- **Smart sorting**: Files opened by the picker are sorted by quantity of changes, allowing you to review the most important files first.
-- **Custom Context**: Choose how many lines of context to see when diffing a path. No folds to interfere with smooth scrolling.
-- **Flexible comparisons**: Compare against any git ref (HEAD, branches, commits, tags)
+- **Large diff handling**: File sections with > 2000 changed lines are auto-folded to a summary line.
+- **Flexible comparisons**: Compare against any git ref (HEAD, branches, commits, tags) using merge-base semantics
 
 ## Requirements
 
 - Neovim >= 0.10
 - Git
-- (Optional) An fzf picker of your choice. Currently supports
-    - [fzf-lua](https://github.com/ibhagwan/fzf-lua)
-    - [telescope](https://github.com/nvim-telescope/telescope.nvim)
 
 *NOTE*
 - This plugin does not use [delta](https://github.com/dandavison/delta), and it is not a dependency
 
 ## Usage
 
-Using deltaview revolves around three user commands. `:DeltaView` brings up the delta diff view on the file you are on, `:Delta` brings up a special delta diff view that more closely resembles the original git-delta, and `:DeltaMenu` brings up a picker that allows you to jump to the diff view of a file in the diff. These commands all come with default keybinds (see |deltaview-keybindings|) as the intended user experience involves bringing the diff view up and closing it frequently.
-
-No `require('deltaview').setup` command is required, though one is made available for configuration. deltaview.nvim is by default, (pseudo) lazy loaded. This means there is little benefit to using a plugin manager like lazy.nvim, but users of vim.pack, vim plug, and non lazy loading plugins will have good startup times. All user commands and keybinds are made available at startup, but the main modules aren't loaded until the initial interaction with deltaview.
-
 ### Commands
 
-#### `:DeltaView [ref]`
+#### `:Diff [ref]`
 
-Opens the delta diff view on the buffer you are on. Uses the last ref that was used (across any `:Delta[View][Menu]` command), or HEAD. Meant to be used when the "after" of the diff matches the current state of your buffer. In other words, this works well when diffing a modified file against HEAD, or diffing a file that hasn't been changed. The cursor is placed at the matching location on entry, and placed at the matching location on exit
+Opens the diff view for the current file against the merge-base of `<ref>` and `HEAD`. This is equivalent to `git diff <ref>...HEAD` for the current file — i.e., "what changes did I make relative to where I branched off from `<ref>`?" Defaults to `master` if no ref is given.
 
-```vim
-:DeltaView                  " Compare current file against HEAD
-:DeltaView main             " Compare against main branch
-:DeltaView HEAD~3           " Compare against 3 commits ago
-:DeltaView v1.0.0           " Compare against tag v1.0.0
-```
-
-#### `:Delta [path] [context] [ref]`
-
-Opens the delta diff view for the current path. Attempts to place the cursor on entry if there is a corresponding line in the diff. Cursor will sync on exit, same as DeltaView. Uses the last ref that was used, or HEAD. Uses the last specified context size, or 3. Uses the current path; can be useful if if you use netrw to be on a path, or just diff a file. Modifiable context can be useful for searching your changed code, such as looking for stray print statements
+The cursor is placed at the matching location on entry and restored on exit.
 
 ```vim
-:Delta .                    " Show all files changed from HEAD, with +- 3 lines of context by default
-:Delta . 10 main...HEAD     " Show all files changed from the common ancestor with the main branch, with 10 lines of context, for everything in the cwd
+:Diff                   " Compare current file vs merge-base of master
+:Diff HEAD              " Compare current file vs HEAD
+:Diff develop           " Compare vs merge-base of develop branch
+:Diff abc1234           " Compare vs merge-base of a specific commit
 ```
 
-#### `:DeltaMenu [ref]`
+#### `:Diffall [ref]`
 
-Opens a picker to select among diffed files and view its diff. Uses the last ref that was used, or HEAD. Picker priority: fzf-lua -> telescope -> vim.ui.select
+Opens the diff view for all changed files in the current working directory against the merge-base of `<ref>` and `HEAD`. Same merge-base semantics as `:Diff`. Defaults to `master`.
 
 ```vim
-:DeltaMenu                  " Show all files changed from HEAD
-:DeltaMenu develop          " Show all files changed from develop branch
-:DeltaMenu develop...HEAD   " Show all files changed from the common ancestor with the develop branch
+:Diffall                " Show all changed files vs merge-base of master
+:Diffall HEAD           " Show all files changed since HEAD
+:Diffall develop        " Show all files changed vs merge-base of develop
 ```
-
-#### `:DeltaMenu! [ref]`
-
-Populates the quickfix list with all changed files and opens it. The quickfix list acts as an alternative native picker that stays open. Opening a file on the quickfix list automatically opens to `:DeltaView`.
-
-Once the list is open:
-- Navigate with `]q` / `[q` (or `:cnext` / `:cprev`) — opening any listed file automatically opens its DeltaView diff
-- Use `:colder` or `:cex []` to manually restore the previous quickfix list and exit the review workflow
-
-```vim
-:DeltaMenu! develop...HEAD   " Show all files changed from the common ancestor with the develop branch in the quickfix list
-```
-
-**Recommendations**:
-
-Set abbreviations for the common commands, as they can be long. While keybinds for each command exist, commands will often be typed in normal workflow to specify the [ref].
-
-```lua
-vim.cmd([[cabbrev dm DeltaMenu]])
-vim.cmd([[cabbrev dv DeltaView]])
-vim.cmd([[cabbrev da Delta . 3]])
-```
-
-*NOTE*:
-- All commands use the last ref used. If `:DeltaMenu main` was used, future calls to `:DeltaMenu`, `:DeltaView`, and `:Delta` will default to `main` instead of `HEAD`.
-- All support special git syntaxes (e.g. `develop...HEAD` for the symmetric difference, or "what did this branch introduce")
 
 ### Keybinds
 
-This plugin comes prepackaged with some default keybinds, which are viewable by using the `d?` keybind when on a buffer created by `:Delta` or `:DeltaView`.
+When viewing a diff (`:Diff` or `:Diffall`):
 
-Global keybindings (none by default — set via `keyconfig` in setup):
-
-| Key           | Action        |
-| ------------- | ---------     |
-| *(unset)*     | :DeltaView    |
-| *(unset)*     | :DeltaMenu    |
-| *(unset)*     | :Delta        |
-
-When viewing a diff (DeltaView or Delta):
-
-| Key              | Action                                       |
-| ---------------- | -------------------------------------------- |
-| `q`              | Return to source file                        |
-| `]c`             | Next hunk (scrolls hunk header to top)       |
-| `[c`             | Previous hunk (scrolls hunk header to top)   |
-| `<leader>hu`     | Revert hunk under cursor to HEAD             |
-| `<leader>mh` / `zc` | Fold/unfold hunk under cursor            |
-| `<leader>mf`     | Fold/unfold file section under cursor        |
-| `<Tab>`          | Open fold under cursor recursively           |
-| `d?`             | Open the help legend                         |
-
-When the DeltaMenu quickfix list is open (:DeltaMenu!):
-
-| Key           | Action                                    |
-| ------------- | ----------------------------------------- |
-| `]q`          | Open next file and view its diff          |
-| `[q`          | Open previous file and view its diff      |
+| Key                    | Action                                       |
+| ---------------------- | -------------------------------------------- |
+| `q`                    | Return to source file                        |
+| `]c`                   | Next hunk (scrolls hunk header to top)       |
+| `[c`                   | Previous hunk (scrolls hunk header to top)   |
+| `]f`                   | Next file section                            |
+| `[f`                   | Previous file section                        |
+| `<leader>hu`           | Revert hunk under cursor to HEAD             |
+| `<leader>mh` / `zc`   | Fold/unfold hunk (changed lines only)        |
+| `<leader>mc`           | Fold/unfold hunk including context lines     |
+| `<leader>mf`           | Fold/unfold entire file section              |
+| `<Tab>`                | Open fold under cursor recursively           |
+| `d?`                   | Open the help legend                         |
 
 ## Installation
 
@@ -157,7 +91,6 @@ vim.pack.add('https://github.com/kokusenz/deltaview.nvim')
 Or your favorite plugin manager, such as [lazy.nvim](https://github.com/folke/lazy.nvim):
 
 ```lua
--- note that there is probably no lazy.nvim benefit, as this plugin is lazy loaded by default
 {
     'kokusenz/deltaview.nvim',
 }
@@ -175,24 +108,15 @@ require('deltaview').setup({
     -- will show the delta style line numbers in the statuscolumn.
     line_numbers = false,
 
-    -- override the picker for :DeltaMenu. If nil, auto-detects in order:
-    -- fzf-lua -> telescope -> vim.ui.select
-    fzf_picker = nil, -- 'fzf-lua' | 'telescope' | 'ui_select' | nil
-
-    -- custom keybindings
+    -- custom keybindings for diff buffers
     keyconfig = {
-        -- global keybind to toggle DeltaMenu (empty string = disabled)
-        dm_toggle_keybind = "<leader>dm",
-
-        -- global keybind to toggle DeltaView (empty string = disabled)
-        dv_toggle_keybind = "<leader>dl",
-
-        -- global keybind to toggle Delta (empty string = disabled)
-        d_toggle_keybind = "<leader>da",
-
-        -- navigate between hunks in a diff
+        -- navigate between hunks
         next_hunk = "]c",
         prev_hunk = "[c",
+
+        -- navigate between file sections (Diffall only)
+        next_diff = "]f",
+        prev_diff = "[f",
 
         -- open help legend
         help_legend = "d?"

@@ -1,62 +1,3 @@
---- @param command_argument vim.api.keyset.create_user_command.command_args
-local delta_view = function(command_argument)
-    local state = require('deltaview.state')
-    local success, err = pcall(function()
-        state.diff_target_ref = command_argument.fargs[1] ~= nil
-            and command_argument.fargs[1]
-            or state.diff_target_ref
-        require('deltaview.view').deltaview_file(state.diff_target_ref)
-    end)
-    if not success then
-        vim.notify('Failed to open DeltaView - ' .. tostring(err), vim.log.levels.ERROR)
-    end
-end
-
---- @param command_argument vim.api.keyset.create_user_command.command_args
-local delta_menu = function(command_argument)
-    local state = require('deltaview.state')
-    local success, err = pcall(function()
-        local arg = command_argument.fargs[1]
-        state.diff_target_ref = arg ~= nil and arg or state.diff_target_ref
-        if command_argument.bang then
-            require('deltaview.menu').populate_quickfix_deltamenu_items()
-            vim.cmd('copen')
-            return
-        end
-        require('deltaview.menu').create_diff_menu_pane(state.diff_target_ref)
-    end)
-    if not success then
-        vim.notify('Failed to open DeltaMenu - ' .. tostring(err), vim.log.levels.ERROR)
-    end
-end
-
---- @param command_argument vim.api.keyset.create_user_command.command_args
-local delta = function(command_argument)
-    local state = require('deltaview.state')
-    local success, err = pcall(function()
-        local custom_path = command_argument.fargs[1]
-        state.default_context = command_argument.fargs[2] ~= nil and
-            tonumber(command_argument.fargs[2]) or state.default_context
-        state.diff_target_ref = command_argument.fargs[3] ~= nil
-            and command_argument.fargs[3]
-            or state.diff_target_ref
-        local path
-        if custom_path ~= nil and custom_path ~= '' then
-            path = vim.fn.fnamemodify(custom_path, ':p')
-        else
-            path = vim.fn.expand('%:p')
-            if path == nil or path == '' then
-                -- I want this to be usable from the nvim splashscreen, and there is no path
-                path = vim.fn.getcwd()
-            end
-        end
-        require('deltaview.view').delta_path(state.diff_target_ref, state.default_context, path)
-    end)
-    if not success then
-        vim.notify('Failed to open Delta - ' .. tostring(err), vim.log.levels.ERROR)
-    end
-end
-
 local all_branches = {}
 
 vim.schedule(function()
@@ -97,43 +38,45 @@ local ref_complete = function(ref_arg_position)
     end
 end
 
-vim.api.nvim_create_user_command('DeltaView', delta_view, {
+--- Run git merge-base <ref> HEAD and return the resulting commit hash, or nil on error.
+--- @param ref string git ref (branch, tag, commit, etc.)
+--- @return string | nil
+local get_merge_base = function(ref)
+    local result = vim.system({ 'git', 'merge-base', ref, 'HEAD' }):wait()
+    if result.code ~= 0 then
+        vim.notify('Failed to get merge base for ' .. ref .. ': ' .. result.stderr, vim.log.levels.ERROR)
+        return nil
+    end
+    return vim.trim(result.stdout)
+end
+
+-- :Diff command — view current file's diff vs merge-base of <ref>
+vim.api.nvim_create_user_command('Diff', function(args)
+    local ref = args.args ~= '' and args.args or 'master'
+    local base = get_merge_base(ref)
+    if base == nil then return end
+    local ok, err = pcall(require('deltaview.view').deltaview_file, base)
+    if not ok then
+        vim.notify('Diff failed: ' .. tostring(err), vim.log.levels.ERROR)
+    end
+end, {
     nargs = '?',
     complete = ref_complete(2),
-    desc =
-    'Open Diff View against a git ref (branch, commit, tag, etc). Using it with no arguments runs it against the last argument used, or defaults to HEAD.'
+    desc = 'Show diff of current file vs merge-base of <ref> (default: master)',
 })
 
--- :DeltaMenu command
-vim.api.nvim_create_user_command('DeltaMenu', delta_menu,
-    {
-        bang = true,
-        nargs = '?',
-        complete = ref_complete(2),
-        desc =
-        'Open Diff Menu against a git ref (branch, commit, tag, etc). Add ! to also populate the quickfix list and open it (:DeltaMenu! [ref]). Using it with no arguments runs it against the last argument used, or defaults to HEAD.'
-    })
-
--- :Delta command
-vim.api.nvim_create_user_command('Delta', delta, {
-    nargs = '*',
-    complete = function(arg_lead, cmd_line, _)
-        local args = vim.split(cmd_line, '%s+')
-        if #args == 2 then
-            return vim.fn.getcompletion(arg_lead, 'file')
-        end
-        if #args == 3 then
-            return { '0', '1', '2', '3' }
-        end
-        if #args == 4 then
-            return ref_complete(4)(arg_lead, cmd_line, _)
-        end
-        return {}
-    end,
-    desc =
-    'Open Diff View for a path against a git ref. Usage: Delta [path] [context] [ref]. Defaults to current buffer path or cwd.'
-})
-
-vim.api.nvim_create_autocmd('VimEnter', {
-    callback = function() require('deltaview.config').setup_keybinds() end
+-- :Diffall command — view all changed files' diffs vs merge-base of <ref>
+vim.api.nvim_create_user_command('Diffall', function(args)
+    local ref = args.args ~= '' and args.args or 'master'
+    local base = get_merge_base(ref)
+    if base == nil then return end
+    local state = require('deltaview.state')
+    local ok, err = pcall(require('deltaview.view').delta_path, base, state.default_context, vim.fn.getcwd())
+    if not ok then
+        vim.notify('Diffall failed: ' .. tostring(err), vim.log.levels.ERROR)
+    end
+end, {
+    nargs = '?',
+    complete = ref_complete(2),
+    desc = 'Show all file diffs vs merge-base of <ref> (default: master)',
 })
