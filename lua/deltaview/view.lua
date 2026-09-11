@@ -106,15 +106,16 @@ end
 --- @param ref string git ref to compare against. Can be branch, commit, tag, etc.
 --- @param context number size of context for the diff
 --- @param path string path we want to diff
+--- @param display_ref string | nil Human-readable ref label for the buffer name (e.g. "origin/master")
 --- @return number | nil bufnr buf id of diff buffer
-M.delta_path = function(ref, context, path)
+M.delta_path = function(ref, context, path, display_ref)
     assert(ref ~= nil)
     assert(context ~= nil)
     assert(path ~= nil)
     local cursor_placement = M.get_cursor_placement_current_buffer()
     cursor_placement.filepath = vim.fn.expand('%:p')
     local og_winline = vim.fn.winline()
-    local diff_bufnr = M.open_git_diff_buffer_for_path(path, ref, context)
+    local diff_bufnr = M.open_git_diff_buffer_for_path(path, ref, context, nil, nil, nil, display_ref)
     if diff_bufnr == nil then
         return
     end
@@ -299,8 +300,9 @@ end
 --- @param winnr number | nil Optional window number to open on.
 --- @param buf_name string | nil Optional name to assign to the buffer
 --- @param is_untracked boolean | nil Optional untracked status. When provided, skips the git lookup used to determine it.
+--- @param display_ref string | nil Human-readable ref label shown in the buffer name (defaults to first 8 chars of ref)
 --- @return number | nil bufnr buf id of diff buffer
-M.open_git_diff_buffer_for_path = function(path, ref, context, winnr, buf_name, is_untracked)
+M.open_git_diff_buffer_for_path = function(path, ref, context, winnr, buf_name, is_untracked, display_ref)
     assert(path ~= nil)
     assert(ref ~= nil)
     assert(context ~= nil)
@@ -335,12 +337,12 @@ M.open_git_diff_buffer_for_path = function(path, ref, context, winnr, buf_name, 
     assert(delta_diff_data_set ~= nil)
     --- @cast delta_diff_data_set DiffData[]
 
-    -- displays ref, filename
-    local diff_buffer_name = (path or '/') .. '    '
-        .. config.viewconfig().vs .. ' ' .. ref .. '    '
+    -- displays ref label and file count
+    local ref_label = display_ref or (ref:sub(1, 8) .. '...')
+    local diff_buffer_name = ref_label .. '    '
         .. config.viewconfig().file .. ' ' .. #delta_diff_data_set .. '    '
 
-    vim.api.nvim_buf_set_name(bufnr, 'deltaview://diff/' .. (buf_name or diff_buffer_name))
+    vim.api.nvim_buf_set_name(bufnr, buf_name or diff_buffer_name)
 
     local no_context_delta_diff_data_set = utils.get_separated_diff_data_set_into_hunks_wo_context(delta_diff_data_set)
     -- this buffer variable allows hunk navigation later. having accurate hunk count also allows us to display it in the name
@@ -356,7 +358,7 @@ M.open_git_diff_buffer_for_path = function(path, ref, context, winnr, buf_name, 
         diff_buffer_name = diff_buffer_name ..
             config.viewconfig().segment ..
             ' ' .. total_hunk_count .. '   '
-        vim.api.nvim_buf_set_name(bufnr, 'deltaview://diff/' .. (buf_name or diff_buffer_name))
+        vim.api.nvim_buf_set_name(bufnr, buf_name or diff_buffer_name)
     end
 
     return bufnr

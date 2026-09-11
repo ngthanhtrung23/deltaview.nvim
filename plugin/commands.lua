@@ -71,7 +71,7 @@ vim.api.nvim_create_user_command('Diffall', function(args)
     local base = get_merge_base(ref)
     if base == nil then return end
     local state = require('deltaview.state')
-    local ok, err = pcall(require('deltaview.view').delta_path, base, state.default_context, vim.fn.getcwd())
+    local ok, err = pcall(require('deltaview.view').delta_path, base, state.default_context, vim.fn.getcwd(), ref)
     if not ok then
         vim.notify('Diffall failed: ' .. tostring(err), vim.log.levels.ERROR)
     end
