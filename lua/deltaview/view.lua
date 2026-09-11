@@ -157,7 +157,6 @@ M.delta_path = function(ref, context, path)
             vim.notify('No file at cursor position', vim.log.levels.WARN)
             return
         end
-        local diff_win = vim.api.nvim_get_current_win()
         local ok, err = pcall(vim.cmd, 'vs ' .. vim.fn.fnameescape(filepath))
         if not ok then
             vim.notify('Failed to open file: ' .. tostring(err), vim.log.levels.ERROR)
@@ -166,7 +165,6 @@ M.delta_path = function(ref, context, path)
         if target_line then
             pcall(vim.api.nvim_win_set_cursor, 0, { target_line, target_col or 0 })
         end
-        vim.api.nvim_win_close(diff_win, false)
     end, { buffer = diff_bufnr, silent = true })
     help.register_keybind(diff_bufnr, 'o', 'open file under cursor in vertical split', 'keybind')
     vim.keymap.set('n', '<leader>hu', function() M.revert_hunk_under_cursor(diff_bufnr) end, { buffer = diff_bufnr, silent = true })
