@@ -4,7 +4,8 @@ local M = {}
 --- @param lang string
 --- @return table<number, LineHighlight[]>
 M.get_treesitter_highlight_captures = function(text, lang)
-    local language_tree = vim.treesitter.get_string_parser(text, lang)
+    local ok, language_tree = pcall(vim.treesitter.get_string_parser, text, lang)
+    if not ok then return {} end
     language_tree:parse()
     local line_highlights = {}
 
@@ -49,7 +50,8 @@ end
 --- @param lang string
 --- @return string[]
 M.get_treesitter_token_strings = function(text, lang)
-    local language_tree = vim.treesitter.get_string_parser(text, lang)
+    local ok, language_tree = pcall(vim.treesitter.get_string_parser, text, lang)
+    if not ok then return M.get_lua_pattern_token_strings(text) end
     local tree = language_tree:parse()[1]
     local node_strings = {}
 

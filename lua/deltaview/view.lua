@@ -1015,6 +1015,9 @@ M.setup_fold_navigation = function(bufnr)
                     removed    = removed,
                     line_count = s.end_row - s.start_row + 1,
                 })
+                if vim.fn.foldclosed(s.start_row) ~= -1 then
+                    M.jump_to_hunk(bufnr, true)
+                end
                 return
             end
         end
@@ -1063,6 +1066,9 @@ M.setup_fold_navigation = function(bufnr)
         local fold_start, fold_end, meta = hunk_fold_info_at(cur_row)
         if fold_start then
             toggle_fold(fold_start, fold_end, meta)
+            if vim.fn.foldclosed(fold_start) ~= -1 then
+                M.jump_to_hunk(bufnr, true)
+            end
         else
             vim.notify('No hunk at cursor position', vim.log.levels.WARN)
         end
@@ -1075,6 +1081,9 @@ M.setup_fold_navigation = function(bufnr)
         local fold_start, fold_end, meta = context_hunk_fold_info_at(cur_row)
         if fold_start then
             toggle_fold(fold_start, fold_end, meta)
+            if vim.fn.foldclosed(fold_start) ~= -1 then
+                M.jump_to_hunk(bufnr, true)
+            end
         else
             vim.notify('No hunk at cursor position', vim.log.levels.WARN)
         end
@@ -1087,6 +1096,9 @@ M.setup_fold_navigation = function(bufnr)
         local fold_start, fold_end, meta = hunk_fold_info_at(cur_row)
         if fold_start then
             close_fold(fold_start, fold_end, meta)
+            if vim.fn.foldclosed(fold_start) ~= -1 then
+                M.jump_to_hunk(bufnr, true)
+            end
         end
     end, { buffer = bufnr, silent = true })
     help.register_keybind(bufnr, 'zc', 'fold hunk', 'keybind')
