@@ -327,10 +327,22 @@ M.deltaview_file = function(ref)
     help.register_keybind(diff_bufnr, '<leader>hu', 'revert hunk under cursor', 'keybind')
     help.setup_help_keybind(diff_bufnr)
     M._refresh_fns[diff_bufnr] = function()
-        local target = M._post_revert_target
+        local target     = M._post_revert_target
         M._post_revert_target = nil
+        local folds      = M._reload_fold_stash[diff_bufnr] or {}
+        local saved_view = M._reload_view_stash[diff_bufnr]
+        M._reload_fold_stash[diff_bufnr] = nil
+        M._reload_view_stash[diff_bufnr] = nil
         local new_bufnr = M.deltaview_file(ref)
-        if new_bufnr and target then M.place_cursor_after_revert(new_bufnr, target) end
+        if not new_bufnr then return end
+        M.restore_fold_state(new_bufnr, folds)
+        if saved_view then
+            local lc = vim.api.nvim_buf_line_count(new_bufnr)
+            saved_view.lnum    = math.min(saved_view.lnum,    lc)
+            saved_view.topline = math.min(saved_view.topline, lc)
+            vim.fn.winrestview(saved_view)
+        end
+        if target then M.place_cursor_after_revert(new_bufnr, target) end
     end
     vim.api.nvim_create_autocmd('BufUnload', { buffer = diff_bufnr, once = true, callback = function()
         M._refresh_fns[diff_bufnr] = nil
@@ -421,10 +433,22 @@ M.delta_path = function(ref, context, path, display_ref, origin_filepath)
     help.register_keybind(diff_bufnr, '<leader>hu', 'revert hunk under cursor', 'keybind')
     help.setup_help_keybind(diff_bufnr)
     M._refresh_fns[diff_bufnr] = function()
-        local target = M._post_revert_target
+        local target     = M._post_revert_target
         M._post_revert_target = nil
+        local folds      = M._reload_fold_stash[diff_bufnr] or {}
+        local saved_view = M._reload_view_stash[diff_bufnr]
+        M._reload_fold_stash[diff_bufnr] = nil
+        M._reload_view_stash[diff_bufnr] = nil
         local new_bufnr = M.delta_path(ref, context, path, display_ref)
-        if new_bufnr and target then M.place_cursor_after_revert(new_bufnr, target) end
+        if not new_bufnr then return end
+        M.restore_fold_state(new_bufnr, folds)
+        if saved_view then
+            local lc = vim.api.nvim_buf_line_count(new_bufnr)
+            saved_view.lnum    = math.min(saved_view.lnum,    lc)
+            saved_view.topline = math.min(saved_view.topline, lc)
+            vim.fn.winrestview(saved_view)
+        end
+        if target then M.place_cursor_after_revert(new_bufnr, target) end
     end
     vim.api.nvim_create_autocmd('BufUnload', { buffer = diff_bufnr, once = true, callback = function()
         M._refresh_fns[diff_bufnr] = nil
