@@ -419,13 +419,17 @@ M.delta_path = function(ref, context, path, display_ref, origin_filepath)
             vim.notify('No file at cursor position', vim.log.levels.WARN)
             return
         end
+        -- Capture screen row of cursor in diff buffer before switching windows.
+        local og_winline = vim.fn.winline()
         local ok, err = pcall(vim.cmd, 'vs ' .. vim.fn.fnameescape(filepath))
         if not ok then
             vim.notify('Failed to open file: ' .. tostring(err), vim.log.levels.ERROR)
             return
         end
         if target_line then
-            pcall(vim.api.nvim_win_set_cursor, 0, { target_line, target_col or 0 })
+            -- Use set_restview so the target line sits at the same screen row
+            -- as the cursor was in the diff buffer, keeping the two panes aligned.
+            M.set_restview(0, og_winline, target_line, target_col or 0)
         end
     end, { buffer = diff_bufnr, silent = true })
     help.register_keybind(diff_bufnr, 'o', 'open file under cursor in vertical split', 'keybind')
