@@ -12,6 +12,14 @@ M._line_redirect_handlers = {}
 --- Read by deltaview_foldtext() to render the summary line.
 --- @type table<number, table<number, {kind: string, label: string, added: number, removed: number, line_count: number}>>
 M._fold_metadata = {}
+--- Fold state stashed during BufUnload so BufReadCmd (which fires after BufUnload
+--- for acwrite buffers) can pick it up even though _fold_metadata is already cleared.
+--- @type table<number, table[]>
+M._reload_fold_stash = {}
+--- Viewport (winsaveview) stashed during BufUnload for the same reason: by the time
+--- BufReadCmd fires, Neovim has cleared the buffer so winsaveview() returns {lnum=1}.
+--- @type table<number, table>
+M._reload_view_stash = {}
 --- @type {rel_path: string|nil, new_line_num: number, data_idx: number} | nil
 M._post_revert_target = nil
 
@@ -58,6 +66,234 @@ M.auto_fold_large_files = function(bufnr)
         end
         ::next_file::
     end
+end
+
+-- ---------------------------------------------------------------------------
+-- Fold-state capture / restore (used by reload_diff_buffer and BufReadCmd)
+-- ---------------------------------------------------------------------------
+
+-- Returns a string fingerprint of a file's changed lines (type:old_ln:new_ln:content).
+-- Two files produce the same fingerprint iff their changed lines are identical.
+-- Only called for folded files at capture/restore time, so cost is bounded by
+-- the number of folds the user has actually created.
+local function file_changed_lines_fingerprint(diff_data)
+    local parts = {}
+    for _, hunk in ipairs(diff_data.hunks) do
+        for _, line in ipairs(hunk.lines) do
+            if line.line_type == 'added' or line.line_type == 'removed' then
+                table.insert(parts, line.line_type
+                    .. ':' .. (line.old_line_num or 0)
+                    .. ':' .. (line.new_line_num or 0)
+                    .. ':' .. (line.content or ''))
+            end
+        end
+    end
+    return table.concat(parts, '\n')
+end
+
+-- Builds a row→identity map for file sections using the same prev_last_row
+-- accumulation logic as get_file_sections() inside setup_fold_navigation.
+local function build_file_position_map(delta_dds)
+    local map = {}
+    local prev_last_row = 0
+    for _, diff_data in ipairs(delta_dds) do
+        local path = diff_data.new_path
+        if path and #diff_data.hunks > 0 then
+            local last_hunk = diff_data.hunks[#diff_data.hunks]
+            local end_row   = last_hunk.lines[#last_hunk.lines].formatted_diff_line_num + 1
+            local start_row = prev_last_row + 1
+            map[start_row]  = { new_path = path, end_row = end_row }
+            prev_last_row   = end_row
+        end
+    end
+    return map
+end
+
+-- Builds a list of hunk fold positions using the same first_line_to_header_offset
+-- object-identity trick as hunk_fold_info_at() inside setup_fold_navigation.
+-- nc_dds reuses the same Lua line objects as delta_dds, so the lookup works.
+local function build_hunk_position_list(delta_dds, nc_dds)
+    local first_line_to_header_offset = {}
+    for _, diff_data in ipairs(delta_dds) do
+        local offset = #diff_data.hunks > 1 and 3 or 0
+        for _, hunk in ipairs(diff_data.hunks) do
+            if #hunk.lines > 0 then
+                first_line_to_header_offset[hunk.lines[1]] = offset
+            end
+        end
+    end
+
+    local list = {}
+    for file_idx, nc_diff_data in ipairs(nc_dds) do
+        for _, hunk in ipairs(nc_diff_data.hunks) do
+            if #hunk.lines == 0 then goto continue end
+            local first_line    = hunk.lines[1]
+            local content_start = first_line.formatted_diff_line_num + 1
+            local header_offset = first_line_to_header_offset[first_line] or 0
+            table.insert(list, {
+                new_path          = delta_dds[file_idx] and delta_dds[file_idx].new_path or '',
+                first_new_line_num = first_line.new_line_num,
+                first_old_line_num = first_line.old_line_num,
+                start_row          = content_start - header_offset,
+                end_row            = hunk.lines[#hunk.lines].formatted_diff_line_num + 1,
+            })
+            ::continue::
+        end
+    end
+    return list
+end
+
+--- Captures the currently-closed folds as semantic descriptors independent of
+--- buffer line numbers.  Only closed folds are captured (open folds need no
+--- restoration).
+--- @param bufnr number
+--- @return table[] semantic fold list
+M.capture_fold_state = function(bufnr)
+    local meta_table = M._fold_metadata[bufnr]
+    if not meta_table then return {} end
+
+    local delta_dds = vim.b[bufnr].delta_diff_data_set
+    local nc_dds    = vim.b[bufnr].no_context_delta_diff_data_set
+    if not delta_dds then return {} end
+
+    local file_map  = build_file_position_map(delta_dds)
+    local hunk_list = nc_dds and build_hunk_position_list(delta_dds, nc_dds) or {}
+
+    -- Build reverse map: foldstart_row → semantic identity
+    local row_to_id = {}
+    for start_row, id in pairs(file_map) do
+        row_to_id[start_row] = { kind = 'file', new_path = id.new_path }
+    end
+    for _, hp in ipairs(hunk_list) do
+        row_to_id[hp.start_row] = {
+            kind               = 'hunk',
+            new_path           = hp.new_path,
+            first_new_line_num = hp.first_new_line_num,
+            first_old_line_num = hp.first_old_line_num,
+        }
+    end
+
+    -- Build a path→DiffData map for quick fingerprint lookups.
+    local path_to_dd = {}
+    for _, dd in ipairs(delta_dds) do
+        if dd.new_path then path_to_dd[dd.new_path] = dd end
+    end
+
+
+    local result = {}
+    for start_row, fold_meta in pairs(meta_table) do
+        -- Only capture folds that are actually closed right now.
+        -- BufUnload fires while Neovim's fold state is still intact, so
+        -- foldclosed() correctly distinguishes open from closed here.
+        -- Without this, Tab-opened folds (zO, no delete_fold call) would
+        -- still be in the metadata table and get incorrectly re-closed.
+        if vim.fn.foldclosed(start_row) == -1 then goto continue end
+        local id = row_to_id[start_row]
+        if id then
+            local extra = {}
+            if id.kind == 'file' then
+                local dd = path_to_dd[id.new_path]
+                if dd then
+                    extra.content_fingerprint = file_changed_lines_fingerprint(dd)
+                end
+            end
+            table.insert(result, vim.tbl_extend('force', id, extra, { fold_meta = fold_meta }))
+        end
+        ::continue::
+    end
+    return result
+end
+
+--- Re-creates and closes folds on a freshly-built buffer from a list of
+--- semantic fold descriptors produced by capture_fold_state.
+--- Silently skips folds whose file/hunk no longer exists in the new diff.
+--- Must be called after setup_fold_navigation and auto_fold_large_files.
+--- @param bufnr number
+--- @param semantic_folds table[]
+M.restore_fold_state = function(bufnr, semantic_folds)
+    if not semantic_folds or #semantic_folds == 0 then return end
+
+    local delta_dds = vim.b[bufnr].delta_diff_data_set
+    local nc_dds    = vim.b[bufnr].no_context_delta_diff_data_set
+    if not delta_dds then return end
+
+    if not M._fold_metadata[bufnr] then M._fold_metadata[bufnr] = {} end
+
+    local file_map  = build_file_position_map(delta_dds)
+    local hunk_list = nc_dds and build_hunk_position_list(delta_dds, nc_dds) or {}
+
+    local path_to_dd = {}
+    for _, dd in ipairs(delta_dds) do
+        if dd.new_path then path_to_dd[dd.new_path] = dd end
+    end
+
+    for _, sf in ipairs(semantic_folds) do
+        local start_row, end_row
+
+        if sf.kind == 'file' then
+            for sr, fd in pairs(file_map) do
+                if fd.new_path == sf.new_path then
+                    start_row = sr
+                    end_row   = fd.end_row
+                    break
+                end
+            end
+            -- "Viewed" semantics: if the file's changed lines differ from when
+            -- the user folded it, show it unfolded so it gets re-reviewed.
+            if start_row and sf.content_fingerprint then
+                local dd = path_to_dd[sf.new_path]
+                if not dd or file_changed_lines_fingerprint(dd) ~= sf.content_fingerprint then
+                    start_row = nil
+                end
+            end
+        else
+            for _, hp in ipairs(hunk_list) do
+                if hp.new_path           == sf.new_path
+                    and hp.first_new_line_num == sf.first_new_line_num
+                    and hp.first_old_line_num == sf.first_old_line_num
+                then
+                    start_row = hp.start_row
+                    end_row   = hp.end_row
+                    break
+                end
+            end
+        end
+
+        if start_row and end_row then
+            if vim.fn.foldclosed(start_row) == -1 then
+                vim.cmd(start_row .. ',' .. end_row .. 'fold')
+            end
+            vim.cmd(start_row .. 'foldclose')
+            M._fold_metadata[bufnr][start_row] = sf.fold_meta
+        end
+    end
+end
+
+--- Reloads the diff buffer by re-running the same git diff, then restores fold
+--- state and scroll position.  Called directly by the R normal-mode binding
+--- (BufReadCmd handles :e).
+--- @param bufnr number
+M.reload_diff_buffer = function(bufnr)
+    local ref             = vim.b[bufnr].delta_ref
+    local display_ref     = vim.b[bufnr].delta_display_ref
+    local context         = vim.b[bufnr].delta_context
+    local path_arg        = vim.b[bufnr].delta_path_arg
+    local origin_filepath = vim.b[bufnr].delta_origin_filepath
+    if not (ref and context and path_arg) then
+        vim.notify('Cannot reload: diff args not found on buffer', vim.log.levels.WARN)
+        return
+    end
+    local folds      = M.capture_fold_state(bufnr)
+    local saved_view = vim.fn.winsaveview()
+    -- delta_path calls nvim_win_set_buf which switches the window away from this
+    -- buffer; bufhidden=wipe then cleans it up automatically — no explicit delete needed.
+    local new_bufnr = M.delta_path(ref, context, path_arg, display_ref, origin_filepath)
+    if not new_bufnr then return end
+    M.restore_fold_state(new_bufnr, folds)
+    local lc = vim.api.nvim_buf_line_count(new_bufnr)
+    saved_view.lnum    = math.min(saved_view.lnum,    lc)
+    saved_view.topline = math.min(saved_view.topline, lc)
+    vim.fn.winrestview(saved_view)
 end
 
 --- @param ref string git ref to compare against. Can be branch, commit, tag, etc.
@@ -108,18 +344,31 @@ end
 --- @param path string path we want to diff
 --- @param display_ref string | nil Human-readable ref label for the buffer name (e.g. "origin/master")
 --- @return number | nil bufnr buf id of diff buffer
-M.delta_path = function(ref, context, path, display_ref)
+M.delta_path = function(ref, context, path, display_ref, origin_filepath)
     assert(ref ~= nil)
     assert(context ~= nil)
     assert(path ~= nil)
     local cursor_placement = M.get_cursor_placement_current_buffer()
-    cursor_placement.filepath = vim.fn.expand('%:p')
+    cursor_placement.filepath = origin_filepath or vim.fn.expand('%:p')
     local og_winline = vim.fn.winline()
     local diff_bufnr = M.open_git_diff_buffer_for_path(path, ref, context, nil, nil, nil, display_ref)
     if diff_bufnr == nil then
         return
     end
-    vim.b[diff_bufnr].git_root = vim.b[diff_bufnr].git_root or utils.get_git_root(path)
+    vim.b[diff_bufnr].git_root              = vim.b[diff_bufnr].git_root or utils.get_git_root(path)
+    vim.b[diff_bufnr].delta_ref             = ref
+    vim.b[diff_bufnr].delta_display_ref     = display_ref
+    vim.b[diff_bufnr].delta_context         = context
+    vim.b[diff_bufnr].delta_path_arg        = path
+    vim.b[diff_bufnr].delta_origin_filepath = cursor_placement.filepath
+    -- 'nofile' buffers do not fire BufReadCmd on :e; 'acwrite' does.
+    -- Reset modified so :e doesn't trigger E37 "No write since last change".
+    vim.api.nvim_set_option_value('buftype', 'acwrite', { buf = diff_bufnr })
+    vim.bo[diff_bufnr].modified = false
+    vim.api.nvim_create_autocmd('BufWriteCmd', {
+        buffer = diff_bufnr,
+        callback = function() vim.bo[diff_bufnr].modified = false end,
+    })
     M.place_cursor_delta_buffer_entry(diff_bufnr, 0, cursor_placement, og_winline, vim.b[diff_bufnr].git_root)
     M.setup_hunk_navigation(diff_bufnr)
     M.setup_winbar(diff_bufnr)
@@ -174,12 +423,50 @@ M.delta_path = function(ref, context, path, display_ref)
     M._refresh_fns[diff_bufnr] = function()
         local target = M._post_revert_target
         M._post_revert_target = nil
-        local new_bufnr = M.delta_path(ref, context, path)
+        local new_bufnr = M.delta_path(ref, context, path, display_ref)
         if new_bufnr and target then M.place_cursor_after_revert(new_bufnr, target) end
     end
     vim.api.nvim_create_autocmd('BufUnload', { buffer = diff_bufnr, once = true, callback = function()
         M._refresh_fns[diff_bufnr] = nil
     end })
+
+    -- Intercept :e (BufReadCmd fires when Neovim tries to re-read the buffer).
+    -- Everything runs synchronously: delta_path calls nvim_win_set_buf which switches
+    -- the window to the new buffer, and bufhidden=wipe cleans up the old buffer.
+    vim.api.nvim_create_autocmd('BufReadCmd', {
+        buffer = diff_bufnr,
+        callback = function()
+            local bufnr           = vim.api.nvim_get_current_buf()
+            -- BufUnload fires before BufReadCmd for acwrite; folds + view were stashed there.
+            local folds           = M._reload_fold_stash[bufnr] or {}
+            local saved_view      = M._reload_view_stash[bufnr] or vim.fn.winsaveview()
+            M._reload_fold_stash[bufnr] = nil
+            M._reload_view_stash[bufnr] = nil
+            local _ref            = vim.b[bufnr].delta_ref
+            local _display_ref    = vim.b[bufnr].delta_display_ref
+            local _context        = vim.b[bufnr].delta_context
+            local _path_arg       = vim.b[bufnr].delta_path_arg
+            local _origin         = vim.b[bufnr].delta_origin_filepath
+            if not (_ref and _context and _path_arg) then return end
+            local new_bufnr = M.delta_path(_ref, _context, _path_arg, _display_ref, _origin)
+            if not new_bufnr then return end
+            -- Defer fold/viewport restore: fold commands don't take effect while
+            -- Neovim is still processing the BufReadCmd event.
+            vim.schedule(function()
+                M.restore_fold_state(new_bufnr, folds)
+                local lc = vim.api.nvim_buf_line_count(new_bufnr)
+                saved_view.lnum    = math.min(saved_view.lnum,    lc)
+                saved_view.topline = math.min(saved_view.topline, lc)
+                vim.fn.winrestview(saved_view)
+            end)
+        end,
+    })
+    help.register_keybind(diff_bufnr, ':e', 'reload diff (re-run git diff)', 'keybind')
+    -- Fallback binding in case BufReadCmd does not fire for nofile buffers.
+    vim.keymap.set('n', 'R', function() M.reload_diff_buffer(diff_bufnr) end,
+        { buffer = diff_bufnr, silent = true })
+    help.register_keybind(diff_bufnr, 'R', 'reload diff (re-run git diff)', 'keybind')
+
     return diff_bufnr
 end
 
@@ -1113,7 +1400,14 @@ M.setup_fold_navigation = function(bufnr)
 
     vim.api.nvim_create_autocmd('BufUnload', {
         buffer = bufnr, once = true,
-        callback = function() M._fold_metadata[bufnr] = nil end,
+        callback = function()
+            -- Stash folds + viewport before clearing metadata: for acwrite buffers
+            -- BufUnload fires before BufReadCmd, and by the time BufReadCmd fires
+            -- the buffer is empty so winsaveview() would return {lnum=1, topline=1}.
+            M._reload_fold_stash[bufnr] = M.capture_fold_state(bufnr)
+            M._reload_view_stash[bufnr] = vim.fn.winsaveview()
+            M._fold_metadata[bufnr] = nil
+        end,
     })
 end
 
