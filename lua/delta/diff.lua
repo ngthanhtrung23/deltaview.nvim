@@ -4,6 +4,39 @@ local utils_treesitter = require('delta.utils_treesitter')
 local utils_highlighting = require('delta.utils_highlighting')
 local config = require('delta.config')
 
+local delta_statuscolumn_expr = '%{%v:lua.require("delta.statuscolumn").render(v:lnum)%}'
+
+-- Capture the user's window defaults before any diff window changes them.
+-- diff.lua is first required when :Diff/:Diffall runs, at which point the current
+-- window is a regular file window with the user's configured settings.
+local _default_number = vim.o.number
+local _default_relativenumber = vim.o.relativenumber
+
+-- Neovim copies window-local options to any new window opened from the current one
+-- (:tabnew, :split, etc.), so windows inherit the delta statuscolumn even though they
+-- are not diff buffers. Scan all windows and reset any that have the inherited expr.
+-- vim.schedule_wrap defers until after all other event handlers for this tick, so no
+-- other plugin can re-apply options between our check and our reset.
+local function cleanup_inherited_statuscolumn()
+    for _, w in ipairs(vim.api.nvim_list_wins()) do
+        if not vim.api.nvim_win_is_valid(w) then goto continue end
+        local sc = vim.api.nvim_get_option_value('statuscolumn', { win = w })
+        if sc ~= delta_statuscolumn_expr then goto continue end
+        local b = vim.api.nvim_win_get_buf(w)
+        if vim.b[b].delta_diff_data_set ~= nil then goto continue end
+        -- statuscolumn='' means built-in rendering (signs always visible).
+        vim.api.nvim_set_option_value('statuscolumn', '', { win = w })
+        vim.api.nvim_set_option_value('number', _default_number, { win = w })
+        vim.api.nvim_set_option_value('relativenumber', _default_relativenumber, { win = w })
+        ::continue::
+    end
+end
+
+vim.api.nvim_create_autocmd({ 'WinNew', 'WinEnter', 'BufEnter' }, {
+    group = vim.api.nvim_create_augroup('DeltaStatuscolumnCleanup', { clear = true }),
+    callback = vim.schedule_wrap(cleanup_inherited_statuscolumn),
+})
+
 --- creates a delta buffer based on a git diff
 --- @param ref string
 --- @param path string | nil
@@ -516,34 +549,46 @@ M.setup_delta_statuscolumn = function(bufnr, winid)
         bufnr, win, win, bufnr
     ))
 
-    local delta_statuscolumn_expr = '%{%v:lua.require("delta.statuscolumn").render(v:lnum)%}'
     local saved_statuscolumn = vim.api.nvim_get_option_value('statuscolumn', { win = win })
     -- If the window already has the delta statuscolumn (e.g. a second diff opened while a first
-    -- was still current), don't save it as the restore target — that would permanently set the
-    -- delta statuscolumn on the source buffer after the new diff closes. Restore to '' instead.
+    -- was still current), don't save it as the restore target — restore to '' instead.
     local current_statuscolumn = (saved_statuscolumn == delta_statuscolumn_expr) and '' or saved_statuscolumn
     local current_number = vim.api.nvim_get_option_value('number', { win = win })
     local current_relativenumber = vim.api.nvim_get_option_value('relativenumber', { win = win })
 
-    vim.api.nvim_set_option_value('statuscolumn',
-        '%{%v:lua.require("delta.statuscolumn").render(v:lnum)%}',
-        { win = win }
-    )
-    vim.api.nvim_set_option_value('number', false, { win = win })
-    vim.api.nvim_set_option_value('relativenumber', false, { win = win })
+    local apply_delta = function(w)
+        if not vim.api.nvim_win_is_valid(w) then return end
+        vim.api.nvim_set_option_value('statuscolumn', delta_statuscolumn_expr, { win = w })
+        vim.api.nvim_set_option_value('number', false, { win = w })
+        vim.api.nvim_set_option_value('relativenumber', false, { win = w })
+    end
+
+    local restore = function(w)
+        if not vim.api.nvim_win_is_valid(w) then return end
+        vim.api.nvim_set_option_value('statuscolumn', current_statuscolumn, { win = w })
+        vim.api.nvim_set_option_value('number', current_number, { win = w })
+        vim.api.nvim_set_option_value('relativenumber', current_relativenumber, { win = w })
+    end
+
+    apply_delta(win)
     vim.cmd('redraw')
 
+    -- Re-apply delta options when the diff window is re-entered after switching away.
+    vim.api.nvim_create_autocmd('WinEnter', {
+        buffer = bufnr,
+        callback = function()
+            apply_delta(vim.api.nvim_get_current_win())
+        end,
+    })
+
+    -- Restore the original window's options when the buffer is unloaded (covers the
+    -- case where 'q' replaces the buffer in-place without a WinLeave firing).
     vim.api.nvim_create_autocmd('BufUnload', {
         buffer = bufnr,
         once = true,
         callback = function()
-            -- restore window options when leaving the buffer
-            if vim.api.nvim_win_is_valid(win) then
-                vim.api.nvim_set_option_value('statuscolumn', current_statuscolumn, { win = win })
-                vim.api.nvim_set_option_value('number', current_number, { win = win })
-                vim.api.nvim_set_option_value('relativenumber', current_relativenumber, { win = win })
-            end
-        end
+            restore(win)
+        end,
     })
 end
 
